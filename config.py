@@ -1,5 +1,5 @@
 """
-Configuration file for Terabox Leech Bot with Auto-Forward
+Configuration file for Terabox Leech Bot with Universal Shortlinks & Auto-Forward
 """
 
 import os
@@ -20,9 +20,11 @@ DATABASE_NAME = os.getenv("DATABASE_NAME", "terabox_bot")
 BACKUP_CHANNEL_ID = int(os.getenv("BACKUP_CHANNEL_ID", "0"))  # Your channel ID
 AUTO_FORWARD_ENABLED = os.getenv("AUTO_FORWARD_ENABLED", "True").lower() == "true"
 
+# UNIVERSAL SHORTLINK CONFIGURATION 💰
+SHORTLINK_API = os.getenv("SHORTLINK_API")  # Your API key
+SHORTLINK_URL = os.getenv("SHORTLINK_URL")  # Your service URL
+
 # Verification Configuration
-SHORTLINK_API = os.getenv("SHORTLINK_API")
-SHORTLINK_URL = os.getenv("SHORTLINK_URL")
 VERIFY_TUTORIAL = os.getenv("VERIFY_TUTORIAL", "https://youtube.com/watch?v=example")
 
 # Bot Settings
@@ -38,7 +40,7 @@ START_MESSAGE = """
 
 ✨ **Features:**
 • 3 Free leech attempts
-• Token verification system  
+• Universal shortlink verification 💰
 • Auto-backup to channel 📢
 • Unlimited access after verification
 
@@ -50,6 +52,8 @@ START_MESSAGE = """
 /help - Get help
 /leech - Simulate leech attempt
 /stats - Check your stats
+
+🌐 **Universal Shortlinks:** Works with ANY service!
 """
 
 VERIFICATION_MESSAGE = """
@@ -59,8 +63,8 @@ You have used all your free attempts ({limit}).
 To continue using the bot, please verify your account.
 
 **How to verify:**
-1. Click the verification link below
-2. Complete the verification process
+1. Click the monetized verification link below 💰
+2. Complete the verification process  
 3. Come back and try again
 
 🔗 **Verification Link:** {verify_link}
@@ -68,6 +72,8 @@ To continue using the bot, please verify your account.
 📺 **Tutorial:** {tutorial}
 
 ⏰ This verification link expires in 1 hour.
+
+💰 **Note:** Each verification click helps support the bot!
 """
 
 VERIFIED_MESSAGE = """
@@ -77,6 +83,8 @@ VERIFIED_MESSAGE = """
 🚀 You now have unlimited access to the bot.
 
 Use /leech to start downloading files!
+
+💰 **Thank you for supporting us through verification!**
 """
 
 # Auto-forward message template
@@ -91,7 +99,10 @@ FORWARD_CAPTION_TEMPLATE = """
 📊 **User Stats:** {total_attempts} total attempts
 ✅ **Verification Status:** {verification_status}
 
-#LeechBot #AutoBackup
+💰 **Revenue:** Monetized verification active
+🌐 **Shortlinks:** Universal system enabled
+
+#LeechBot #AutoBackup #Monetized
 """
 
 # Validation
@@ -100,8 +111,15 @@ if not BOT_TOKEN:
 if not MONGODB_URL:
     raise ValueError("MONGODB_URL is required")
 if not SHORTLINK_API:
-    raise ValueError("SHORTLINK_API is required")
+    raise ValueError("SHORTLINK_API is required - Get from your shortlink service")
 if not SHORTLINK_URL:
-    raise ValueError("SHORTLINK_URL is required")
+    raise ValueError("SHORTLINK_URL is required - Get from your shortlink service")
 if AUTO_FORWARD_ENABLED and not BACKUP_CHANNEL_ID:
     raise ValueError("BACKUP_CHANNEL_ID is required when auto-forward is enabled")
+
+# Configuration status
+print("🚀 Configuration loaded successfully!")
+print(f"🤖 Bot: {BOT_USERNAME}")
+print(f"🌐 Shortlinks: {'Enabled' if SHORTLINK_API else 'Disabled'}")
+print(f"📢 Auto-Forward: {'Enabled' if AUTO_FORWARD_ENABLED else 'Disabled'}")
+print(f"💰 Monetization: {'Active' if SHORTLINK_API and SHORTLINK_URL else 'Inactive'}")
