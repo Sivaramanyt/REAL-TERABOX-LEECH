@@ -3,7 +3,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from database import (
     get_user_data, increment_leech_attempts, can_user_leech, 
-    needs_verification, set_verification_token, verify_user, get_bot_stats
+    needs_verification, set_verification_token, verify_user, get_bot_stats,
+    users_collection  # Make sure this is imported for direct db access
 )
 from verification import (
     generate_verify_token, generate_monetized_verification_link, 
@@ -56,7 +57,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🤖 **Terabox Leech Bot Help**
 
 - 3 free leech attempts
-- After 3, you must verify (by visiting the shortlink)
+- After 3, click monetized shortlink to verify
 - Unlimited access after verification
 - All files auto-backed up to channel
 
@@ -70,8 +71,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /testforward - Test auto-forward
 /testapi - Test universal shortlink
 /debugapi - Deep shortlink debug
+/resetverify - Reset user's verification status (Admin only)
 
-Bot will always try your latest shortlink service!
+Bot always uses your latest shortlink service!
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -123,10 +125,10 @@ async def send_verification_message(update: Update, context: ContextTypes.DEFAUL
             message = (
                 "🔒 Verification Required!\n\n"
                 f"You have used all your free attempts ({FREE_LEECH_LIMIT}).\n"
-                "To continue, please verify using the monetized link (supports bot):\n\n"
+                "To continue, verify using the link below:\n\n"
                 f"🔗 Verification Link: {verify_link}\n"
                 f"📺 Tutorial: {VERIFY_TUTORIAL}\n\n"
-                "Note: Verification link = money for the bot owner!"
+                "Note: Verification click = money for this bot."
             )
             keyboard = [
                 [InlineKeyboardButton("💰 Verify & Support", url=verify_link)],
@@ -166,7 +168,7 @@ Auto-Forward: {'Enabled' if AUTO_FORWARD_ENABLED else 'Disabled'}
     if user_id == OWNER_ID:
         bot_stats = get_bot_stats()
         bot_stats_text = f"""
-Bot Stats (Admin Only)
+Bot Stats (Admin)
 
 Total Users: {bot_stats['total_users']}
 Verified Users: {bot_stats['verified_users']}
@@ -194,7 +196,7 @@ async def test_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if test_shortlink_api():
         await update.message.reply_text(
             "✅ Universal Shortlink API Test SUCCESSFUL!\n"
-            "Your verification system will work with any shortlink service."
+            "Verification will work with any shortlink."
         )
     else:
         await update.message.reply_text(
@@ -207,8 +209,34 @@ async def debug_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Admin only.")
         return
     await update.message.reply_text("🪛 Testing all shortlink formats...")
-    # This triggers a test against all known formats
     link = create_universal_shortlink("https://google.com")
     await update.message.reply_text(
         f"Debug result: {link if link else 'No shortlink created.'}")
 
+# --- Add Reset Verify command here ---
+
+async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID:
+        await update.message.reply_text("❌ Only the bot owner can use this command.")
+        return
+    try:
+        if context.args:
+            target_id = int(context.args[0])
+        else:
+            target_id = user_id  # Default to your own id
+        result = users_collection.update_one(
+            {"user_id": target_id},
+            {"$set": {"is_verified": False, "leech_attempts": 0}}
+        )
+        if result.modified_count > 0:
+            await update.message.reply_text(
+                f"✅ Verification RESET for user {target_id}. User will now see verification link again."
+            )
+        else:
+            await update.message.reply_text(
+                "ℹ️ No change. User may not exist or already unverified."
+            )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error resetting verification: {e}")
+                              
