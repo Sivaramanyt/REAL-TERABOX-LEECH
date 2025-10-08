@@ -1,14 +1,13 @@
 """
 UNIVERSAL Shortlink Verification System
-Automatically detects and adapts to ANY shortlink service API format
-Supports arolinks.com and 50+ other shortlink services
+Works with ANY shortlink service - arolinks, gplinks, shrinkme, etc.
+GOAL: Generate shortlinks that earn you money when users click them
 """
 
 import string
 import random
 import requests
 import logging
-from urllib.parse import urlparse
 from config import SHORTLINK_API, SHORTLINK_URL
 
 logger = logging.getLogger(__name__)
@@ -18,265 +17,171 @@ def generate_verify_token(length=16):
     chars = string.ascii_letters + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
-def detect_shortlink_service(url):
+def create_universal_shortlink(original_url):
     """
-    Automatically detect shortlink service from URL
-    Returns service type for API adaptation
+    UNIVERSAL shortlink creator
+    Tries ALL common API formats until one works
+    GOAL: Create shortlink that earns you money
     """
-    try:
-        domain = urlparse(url).netloc.lower()
-        
-        # Remove www. prefix
-        if domain.startswith('www.'):
-            domain = domain[4:]
-        
-        # Arolinks and similar services
-        if 'arolinks' in domain:
-            return 'arolinks'
-        elif 'gplinks' in domain:
-            return 'gplinks'
-        elif 'shrinkme' in domain:
-            return 'shrinkme'
-        elif 'shortest' in domain:
-            return 'shortest'
-        elif 'linkvertise' in domain:
-            return 'linkvertise'
-        elif 'adfly' in domain or 'adf.ly' in domain:
-            return 'adfly'
-        elif 'short.io' in domain:
-            return 'shortio'
-        elif 'bit.ly' in domain:
-            return 'bitly'
-        elif 'tinyurl' in domain:
-            return 'tinyurl'
+    logger.info(f"🔗 Creating shortlink for: {original_url}")
+    logger.info(f"🌐 Using service: {SHORTLINK_URL}")
+    logger.info(f"🔑 API key: {SHORTLINK_API[:10]}...")
+    
+    # Prepare API endpoint
+    api_endpoint = SHORTLINK_URL
+    if not api_endpoint.startswith('http'):
+        api_endpoint = f"https://{api_endpoint}"
+    if not api_endpoint.endswith('/api'):
+        if not api_endpoint.endswith('/'):
+            api_endpoint += '/api'
         else:
-            return 'generic'
-            
-    except Exception as e:
-        logger.error(f"Error detecting service: {e}")
-        return 'generic'
-
-def create_universal_shortlink(url):
-    """
-    Universal shortlink creator - works with ANY service
-    Tries multiple API formats until one works
-    """
-    try:
-        service_type = detect_shortlink_service(SHORTLINK_URL)
-        logger.info(f"Detected shortlink service: {service_type}")
+            api_endpoint += 'api'
+    
+    # Try all common API formats
+    api_formats = [
+        # Format 1: GET with api & url parameters
+        {'method': 'GET', 'params': {'api': SHORTLINK_API, 'url': original_url}},
         
-        # Try different API formats in order of popularity
-        api_formats = [
-            format_standard_api,      # Most common format
-            format_post_api,          # POST request format
-            format_arolinks_api,      # Arolinks specific
-            format_gplinks_api,       # GPLinks specific
-            format_shrinkme_api,      # ShrinkMe specific
-            format_generic_get_api,   # Generic GET
-            format_json_post_api,     # JSON POST
-            format_form_post_api,     # Form POST
-        ]
+        # Format 2: POST with api & url parameters  
+        {'method': 'POST', 'data': {'api': SHORTLINK_API, 'url': original_url}},
         
-        for api_format in api_formats:
-            try:
-                result = api_format(url)
-                if result:
-                    logger.info(f"✅ Shortlink created successfully: {result}")
-                    return result
-            except Exception as e:
-                logger.debug(f"API format failed: {e}")
-                continue
+        # Format 3: GET with key & url parameters
+        {'method': 'GET', 'params': {'key': SHORTLINK_API, 'url': original_url}},
         
-        logger.error("❌ All API formats failed")
-        return None
+        # Format 4: GET with token & link parameters
+        {'method': 'GET', 'params': {'token': SHORTLINK_API, 'link': original_url}},
         
-    except Exception as e:
-        logger.error(f"Universal shortlink error: {e}")
-        return None
-
-def format_standard_api(url):
-    """Standard API format (works with 80% of services)"""
-    payload = {
-        'api': SHORTLINK_API,
-        'url': url
-    }
-    
-    response = requests.get(SHORTLINK_URL, params=payload, timeout=10)
-    data = response.json()
-    
-    # Try different response formats
-    return (data.get('shortenedUrl') or 
-            data.get('short_url') or
-            data.get('result_url') or
-            data.get('shortUrl') or
-            data.get('data', {}).get('url'))
-
-def format_post_api(url):
-    """POST request format"""
-    payload = {
-        'api': SHORTLINK_API,
-        'url': url
-    }
-    
-    response = requests.post(SHORTLINK_URL, data=payload, timeout=10)
-    data = response.json()
-    
-    return (data.get('shortenedUrl') or 
-            data.get('short_url') or
-            data.get('result_url'))
-
-def format_arolinks_api(url):
-    """Arolinks.com specific format"""
-    payload = {
-        'api': SHORTLINK_API,
-        'url': url,
-        'alias': generate_verify_token(8)  # Optional custom alias
-    }
-    
-    response = requests.get(SHORTLINK_URL, params=payload, timeout=10)
-    data = response.json()
-    
-    if data.get('status') == 'success':
-        return data.get('shortenedUrl')
-    return None
-
-def format_gplinks_api(url):
-    """GPLinks specific format"""
-    payload = {
-        'api': SHORTLINK_API,
-        'url': url
-    }
-    
-    response = requests.get(SHORTLINK_URL, params=payload, timeout=10)
-    data = response.json()
-    
-    if data.get('status') == 'success':
-        return data.get('shortenedUrl')
-    return None
-
-def format_shrinkme_api(url):
-    """ShrinkMe specific format"""
-    payload = {
-        'api': SHORTLINK_API,
-        'url': url
-    }
-    
-    response = requests.get(SHORTLINK_URL, params=payload, timeout=10)
-    data = response.json()
-    
-    if data.get('status') == 'success':
-        return data.get('shortenedUrl')
-    return None
-
-def format_generic_get_api(url):
-    """Generic GET format with different parameter names"""
-    parameter_combinations = [
-        {'key': SHORTLINK_API, 'url': url},
-        {'token': SHORTLINK_API, 'link': url},
-        {'api_key': SHORTLINK_API, 'long_url': url},
-        {'apikey': SHORTLINK_API, 'originalUrl': url},
-        {'access_token': SHORTLINK_API, 'url': url}
+        # Format 5: JSON POST with Authorization header
+        {'method': 'POST', 'json': {'url': original_url}, 'headers': {'Authorization': f'Bearer {SHORTLINK_API}'}},
+        
+        # Format 6: Form POST with api_key
+        {'method': 'POST', 'data': {'api_key': SHORTLINK_API, 'long_url': original_url}},
+        
+        # Format 7: GET with apikey parameter
+        {'method': 'GET', 'params': {'apikey': SHORTLINK_API, 'originalUrl': original_url}},
+        
+        # Format 8: Custom format for specific services
+        {'method': 'GET', 'params': {'api': SHORTLINK_API, 'url': original_url, 'alias': generate_verify_token(6)}},
     ]
     
-    for params in parameter_combinations:
+    # Try each format
+    for i, format_config in enumerate(api_formats, 1):
         try:
-            response = requests.get(SHORTLINK_URL, params=params, timeout=10)
-            data = response.json()
+            logger.info(f"🔄 Trying API format #{i}: {format_config['method']}")
             
-            result = (data.get('shortenedUrl') or 
-                     data.get('short_url') or
-                     data.get('result_url') or
-                     data.get('shortUrl') or
-                     data.get('shortened_url'))
+            # Make request based on format
+            if format_config['method'] == 'GET':
+                response = requests.get(
+                    api_endpoint, 
+                    params=format_config.get('params'),
+                    headers=format_config.get('headers', {}),
+                    timeout=15
+                )
+            else:  # POST
+                response = requests.post(
+                    api_endpoint,
+                    data=format_config.get('data'),
+                    json=format_config.get('json'), 
+                    headers=format_config.get('headers', {}),
+                    timeout=15
+                )
             
-            if result:
-                return result
-                
-        except:
-            continue
+            logger.info(f"📊 Response Status: {response.status_code}")
+            logger.info(f"📄 Response: {response.text[:500]}")
+            
+            # Try to parse JSON response
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    
+                    # Check all possible response field names
+                    possible_fields = [
+                        'shortenedUrl', 'shortened_url', 'short_url', 'shortUrl',
+                        'result_url', 'url', 'link', 'shortened', 'short_link',
+                        'result', 'shortlink', 'short', 'data'
+                    ]
+                    
+                    for field in possible_fields:
+                        if field in data and data[field]:
+                            shortlink = data[field]
+                            # Extract URL if it's nested in data object
+                            if isinstance(shortlink, dict) and 'url' in shortlink:
+                                shortlink = shortlink['url']
+                            
+                            # Validate it's a proper URL
+                            if isinstance(shortlink, str) and shortlink.startswith('http'):
+                                logger.info(f"✅ SUCCESS! Shortlink created: {shortlink}")
+                                return shortlink
+                    
+                    # Check if response indicates success but different format
+                    if data.get('status') == 'success' or data.get('success') == True:
+                        logger.info(f"📋 Success response but no URL found: {data}")
+                    else:
+                        logger.warning(f"⚠️ Format #{i} failed: {data}")
+                        
+                except ValueError:
+                    # Not JSON, maybe plain text response
+                    if response.text.startswith('http'):
+                        logger.info(f"✅ SUCCESS! Plain text shortlink: {response.text}")
+                        return response.text.strip()
+                        
+        except requests.exceptions.Timeout:
+            logger.warning(f"⏰ Format #{i} timed out")
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"🔌 Format #{i} connection error: {e}")
+        except Exception as e:
+            logger.warning(f"❌ Format #{i} error: {e}")
     
+    logger.error("❌ ALL API formats failed! No shortlink created.")
     return None
 
-def format_json_post_api(url):
-    """JSON POST format"""
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': f'Bearer {SHORTLINK_API}'
-    }
-    
-    payload = {
-        'url': url,
-        'domain': urlparse(SHORTLINK_URL).netloc
-    }
-    
-    response = requests.post(SHORTLINK_URL, json=payload, headers=headers, timeout=10)
-    data = response.json()
-    
-    return (data.get('short_url') or 
-            data.get('shortURL') or
-            data.get('result_url'))
-
-def format_form_post_api(url):
-    """Form POST format"""
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-    
-    payload = {
-        'api': SHORTLINK_API,
-        'url': url
-    }
-    
-    response = requests.post(SHORTLINK_URL, data=payload, headers=headers, timeout=10)
-    data = response.json()
-    
-    return (data.get('shortenedUrl') or 
-            data.get('short_url') or
-            data.get('result_url'))
-
 def test_shortlink_api():
-    """
-    Test function to verify your shortlink API works
-    Returns True if API is working, False otherwise
-    """
+    """Test your shortlink API with detailed debugging"""
     try:
+        logger.info("🧪 Testing shortlink API...")
+        
+        # Test with a simple URL
         test_url = "https://google.com"
+        
         result = create_universal_shortlink(test_url)
         
-        if result and result.startswith('http'):
-            logger.info(f"✅ Shortlink API test successful: {result}")
+        if result and result.startswith('http') and result != test_url:
+            logger.info(f"✅ API TEST SUCCESS! Shortlink: {result}")
             return True
         else:
-            logger.error("❌ Shortlink API test failed")
+            logger.error(f"❌ API TEST FAILED! Result: {result}")
             return False
             
     except Exception as e:
-        logger.error(f"❌ Shortlink API test error: {e}")
+        logger.error(f"❌ API test error: {e}")
         return False
 
 def generate_monetized_verification_link(bot_username, token):
     """
-    Generate verification link using universal shortlink system
-    Automatically adapts to ANY shortlink service
+    Generate MONETIZED verification link
+    This is where you EARN MONEY when users click
     """
     try:
-        # Create direct verification URL
-        verify_url = f"https://t.me/{bot_username}?start=verify_{token}"
+        # Create Telegram verification URL
+        telegram_url = f"https://t.me/{bot_username}?start=verify_{token}"
         
-        # Create universal shortlink
-        monetized_url = create_universal_shortlink(verify_url)
+        logger.info(f"🎯 Creating MONETIZED shortlink for verification...")
+        logger.info(f"📱 Original Telegram URL: {telegram_url}")
         
-        if monetized_url:
-            logger.info(f"✅ Universal shortlink created: {monetized_url}")
-            return monetized_url
+        # Create shortlink using your API
+        shortlink = create_universal_shortlink(telegram_url)
+        
+        if shortlink and shortlink != telegram_url:
+            logger.info(f"💰 MONETIZED SHORTLINK CREATED! You'll earn money when users click: {shortlink}")
+            return shortlink
         else:
-            # Fallback to direct URL if shortlink fails
-            logger.warning("Universal shortlink failed, using direct URL")
-            return verify_url
+            logger.error(f"❌ SHORTLINK CREATION FAILED! Using direct Telegram link (NO MONEY EARNED)")
+            logger.error(f"🔧 Check your SHORTLINK_API and SHORTLINK_URL settings!")
+            return telegram_url
             
     except Exception as e:
-        logger.error(f"Error generating verification link: {e}")
-        return verify_url  # Always return something
+        logger.error(f"❌ Error creating monetized link: {e}")
+        return f"https://t.me/{bot_username}?start=verify_{token}"
 
 def extract_token_from_start(text):
     """Extract verification token from /start command"""
@@ -288,8 +193,7 @@ def extract_token_from_start(text):
         logger.error(f"Error extracting token: {e}")
         return None
 
-# BACKWARD COMPATIBILITY - Keep old function name for existing imports
+# Backward compatibility
 def generate_verification_link(bot_username, token):
-    """Backward compatibility wrapper"""
     return generate_monetized_verification_link(bot_username, token)
-                    
+    
