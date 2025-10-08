@@ -1,5 +1,5 @@
 """
-Command and message handlers with auto-forward support
+Command and message handlers with universal shortlink support
 """
 
 import logging
@@ -9,7 +9,7 @@ from database import (
     get_user_data, increment_leech_attempts, can_user_leech, 
     needs_verification, set_verification_token, verify_user, get_bot_stats
 )
-from verification import generate_verify_token, generate_verification_link, extract_token_from_start
+from verification import generate_verify_token, generate_monetized_verification_link, extract_token_from_start, test_shortlink_api
 from auto_forward import forward_file_to_channel, send_auto_forward_notification, test_auto_forward
 from config import (
     START_MESSAGE, VERIFICATION_MESSAGE, VERIFIED_MESSAGE, 
@@ -83,15 +83,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 **Admin Commands:**
 /testforward - Test auto-forward (Admin only)
+/testapi - Test shortlink API (Admin only)
 
 **Verification Process:**
 1. Use all 3 free attempts
-2. Bot will provide verification link
-3. Complete the verification
+2. Bot will provide monetized verification link
+3. Complete the verification (earns you money 💰)
 4. Enjoy unlimited access!
 
 **Note:** This is currently in testing phase. 
 Actual Terabox leeching will be added later.
+
+**Universal Shortlinks:** 
+Bot supports all shortlink services - arolinks, gplinks, shrinkme, and more!
 """
     
     await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -153,7 +157,7 @@ async def leech_attempt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Error processing your request. Please try again.")
 
 async def send_verification_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send verification message to user"""
+    """Send verification message with monetized shortlink"""
     user_id = update.effective_user.id
     
     # Generate verification token
@@ -161,8 +165,8 @@ async def send_verification_message(update: Update, context: ContextTypes.DEFAUL
     
     # Save token to database
     if set_verification_token(user_id, token):
-        # Generate verification link
-        verify_link = generate_verification_link(BOT_USERNAME, token)
+        # Generate monetized verification link using universal system
+        verify_link = generate_monetized_verification_link(BOT_USERNAME, token)
         
         if verify_link:
             message = VERIFICATION_MESSAGE.format(
@@ -173,7 +177,7 @@ async def send_verification_message(update: Update, context: ContextTypes.DEFAUL
             
             # Create inline keyboard
             keyboard = [
-                [InlineKeyboardButton("🔗 Verify Now", url=verify_link)],
+                [InlineKeyboardButton("💰 Verify Now (Earn Money)", url=verify_link)],
                 [InlineKeyboardButton("📺 How to Verify?", url=VERIFY_TUTORIAL)]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -236,6 +240,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ✅ **Verified Users:** {bot_stats['verified_users']}
 📊 **Total Attempts:** {bot_stats['total_attempts']}
 📢 **Backup Channel:** {BACKUP_CHANNEL_ID if BACKUP_CHANNEL_ID else 'Not Set'}
+🔗 **Universal Shortlinks:** Enabled
+💰 **Monetization:** Active
 """
         user_stats += bot_stats_text
     
@@ -250,3 +256,35 @@ async def test_forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     await test_auto_forward(context, update.effective_chat.id)
+
+async def test_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test universal shortlink API (Admin only)"""
+    user_id = update.effective_user.id
+    
+    if user_id != OWNER_ID:
+        await update.message.reply_text("❌ This command is only for admins.")
+        return
+    
+    await update.message.reply_text("🧪 **Testing Universal Shortlink API...**", parse_mode='Markdown')
+    
+    # Test the API
+    if test_shortlink_api():
+        await update.message.reply_text(
+            "✅ **Universal Shortlink API Test Successful!**\n\n"
+            "🌐 **Service:** Auto-detected\n"
+            "💰 **Monetization:** Working\n" 
+            "🔗 **Verification Links:** Will work perfectly\n\n"
+            "Your verification system is ready to earn money!",
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            "❌ **Universal Shortlink API Test Failed**\n\n"
+            "🔧 **Please check:**\n"
+            "• SHORTLINK_API key is correct\n"
+            "• SHORTLINK_URL is valid\n"
+            "• Service is online\n\n"
+            "💡 **Tip:** Bot will fallback to direct links if shortlink fails.",
+            parse_mode='Markdown'
+        )
+        
