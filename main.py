@@ -10,6 +10,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from config import *
 from handlers import start, help_command, leech_attempt, verify_callback, stats, test_forward
 from database import init_db
+from health_server import run_health_server
 
 # Configure logging
 logging.basicConfig(
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 def main():
     """Start the bot."""
+    # Start health server for Koyeb
+    run_health_server()
+    
     # Initialize database
     init_db()
     
@@ -48,4 +52,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-  
+    
