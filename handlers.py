@@ -9,6 +9,7 @@ from database import (
     get_user_data, increment_leech_attempts, can_user_leech, 
     needs_verification, set_verification_token, verify_user, get_bot_stats
 )
+# FIXED IMPORT - Use correct function names
 from verification import generate_verify_token, generate_monetized_verification_link, extract_token_from_start, test_shortlink_api
 from auto_forward import forward_file_to_channel, send_auto_forward_notification, test_auto_forward
 from config import (
@@ -165,7 +166,7 @@ async def send_verification_message(update: Update, context: ContextTypes.DEFAUL
     
     # Save token to database
     if set_verification_token(user_id, token):
-        # Generate monetized verification link using universal system
+        # FIXED - Use correct function name
         verify_link = generate_monetized_verification_link(BOT_USERNAME, token)
         
         if verify_link:
