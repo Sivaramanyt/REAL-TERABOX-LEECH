@@ -287,4 +287,9 @@ def extract_token_from_start(text):
     except Exception as e:
         logger.error(f"Error extracting token: {e}")
         return None
-        
+
+# BACKWARD COMPATIBILITY - Keep old function name for existing imports
+def generate_verification_link(bot_username, token):
+    """Backward compatibility wrapper"""
+    return generate_monetized_verification_link(bot_username, token)
+                    
