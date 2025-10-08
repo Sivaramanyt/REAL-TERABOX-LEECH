@@ -1,21 +1,11 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from database import (
-    get_user_data, increment_leech_attempts, can_user_leech, 
-    needs_verification, set_verification_token, verify_user, get_bot_stats,
-    users_collection  # Make sure this is imported for direct db access
-)
-from verification import (
-    generate_verify_token, generate_monetized_verification_link, 
-    extract_token_from_start, test_shortlink_api, create_universal_shortlink
-)
+from database import get_user_data, increment_leech_attempts, can_user_leech, needs_verification, set_verification_token, verify_user, get_bot_stats, users_collection
+from verification import generate_verify_token, generate_monetized_verification_link, extract_token_from_start, test_shortlink_api, create_universal_shortlink
 from auto_forward import forward_file_to_channel, send_auto_forward_notification, test_auto_forward
-from config import (
-    START_MESSAGE, VERIFICATION_MESSAGE, VERIFIED_MESSAGE, 
-    FREE_LEECH_LIMIT, VERIFY_TUTORIAL, BOT_USERNAME, OWNER_ID,
-    AUTO_FORWARD_ENABLED, BACKUP_CHANNEL_ID
-)
+from config import START_MESSAGE, VERIFICATION_MESSAGE, VERIFIED_MESSAGE, FREE_LEECH_LIMIT, VERIFY_TUTORIAL, BOT_USERNAME, OWNER_ID, AUTO_FORWARD_ENABLED, BACKUP_CHANNEL_ID
+from terabox_processor import process_terabox_links  # <-- This is new! Connects your Terabox code
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +20,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(VERIFIED_MESSAGE, parse_mode='Markdown')
                 return
             else:
-                await update.message.reply_text(
-                    "❌ Verification failed. Please try again.", parse_mode='Markdown'
-                )
+                await update.message.reply_text("❌ Verification failed. Please try again.", parse_mode='Markdown')
                 return
     user_data = get_user_data(user_id)
     if not user_data:
@@ -40,11 +28,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     used_attempts = user_data.get("leech_attempts", 0)
     is_verified = user_data.get("is_verified", False)
-    if is_verified:
-        verification_status = "✅ **Status:** Verified (Unlimited access)"
-    else:
-        remaining = FREE_LEECH_LIMIT - used_attempts
-        verification_status = f"⏳ **Status:** {remaining} attempts remaining"
+    verification_status = (
+        "✅ **Status:** Verified (Unlimited access)"
+        if is_verified else f"⏳ **Status:** {FREE_LEECH_LIMIT-used_attempts} attempts remaining"
+    )
     message = START_MESSAGE.format(
         mention=user.mention_markdown(),
         used_attempts=used_attempts,
@@ -77,9 +64,11 @@ Bot always uses your latest shortlink service!
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
+# === This is the real Terabox leech handler ===
 async def leech_attempt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
+
     if not can_user_leech(user_id):
         if needs_verification(user_id):
             await send_verification_message(update, context)
@@ -87,34 +76,8 @@ async def leech_attempt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Error checking your account. Please try /start")
             return
-    if increment_leech_attempts(user_id):
-        user_data = get_user_data(user_id)
-        used_attempts = user_data.get("leech_attempts", 0)
-        is_verified = user_data.get("is_verified", False)
-        success_message = await update.message.reply_text(
-            f"✅ Leech Attempt #{used_attempts}\n"
-            "🚀 Processing your request...\n"
-            "📁 File: Sample.mp4\n"
-            "📊 Status: Success (Simulated)\n"
-            "📢 Auto-forwarding to backup channel..."
-        )
-        if AUTO_FORWARD_ENABLED:
-            forward_success = await forward_file_to_channel(
-                context, user, success_message, 
-                original_link="https://terabox.com/s/simulated_link"
-            )
-            if forward_success:
-                await send_auto_forward_notification(update, context)
-        if not is_verified and used_attempts < FREE_LEECH_LIMIT:
-            remaining = FREE_LEECH_LIMIT - used_attempts
-            await update.message.reply_text(
-                f"⏳ Remaining Free Attempts: {remaining}\n"
-                "Note: This is a simulation. Real leeching will be added soon."
-            )
-        elif used_attempts >= FREE_LEECH_LIMIT and not is_verified:
-            await send_verification_message(update, context)
-    else:
-        await update.message.reply_text("❌ Error processing your request. Please try again.")
+    # Call your real Terabox leech processor now!
+    await process_terabox_links(update, context)
 
 async def send_verification_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -158,11 +121,10 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_stats = f"""
 👤 Your Stats
 
-Leech AttemptPts: {used_attempts}
+Leech Attempts: {used_attempts}
 Verification Status: {'Verified' if is_verified else 'Not Verified'}
 Joined: {join_date.strftime('%Y-%m-%d') if hasattr(join_date, 'strftime') else join_date}
 Auto-Forward: {'Enabled' if AUTO_FORWARD_ENABLED else 'Disabled'}
-
 {'🚀 Status: Unlimited Access' if is_verified else f'⏳ Remaining: {FREE_LEECH_LIMIT - used_attempts} free attempts'}
 """
     if user_id == OWNER_ID:
@@ -172,8 +134,8 @@ Bot Stats (Admin)
 
 Total Users: {bot_stats['total_users']}
 Verified Users: {bot_stats['verified_users']}
-Total AttemptPts: {bot_stats['total_attempts']}
-BackuP Channel: {BACKUP_CHANNEL_ID if BACKUP_CHANNEL_ID else 'Not Set'}
+Total Attempts: {bot_stats['total_attempts']}
+Backup Channel: {BACKUP_CHANNEL_ID if BACKUP_CHANNEL_ID else 'Not Set'}
 Universal Shortlinks: Enabled
 Monetization: Active
 """
@@ -211,9 +173,8 @@ async def debug_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🪛 Testing all shortlink formats...")
     link = create_universal_shortlink("https://google.com")
     await update.message.reply_text(
-        f"Debug result: {link if link else 'No shortlink created.'}")
-
-# --- Add Reset Verify command here ---
+        f"Debug result: {link if link else 'No shortlink created.'}"
+    )
 
 async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -224,7 +185,7 @@ async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if context.args:
             target_id = int(context.args[0])
         else:
-            target_id = user_id  # Default to your own id
+            target_id = user_id # Default to your own id
         result = users_collection.update_one(
             {"user_id": target_id},
             {"$set": {"is_verified": False, "leech_attempts": 0}}
@@ -239,4 +200,5 @@ async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         await update.message.reply_text(f"❌ Error resetting verification: {e}")
-                              
+
+# ... Any other handlers you originally had
