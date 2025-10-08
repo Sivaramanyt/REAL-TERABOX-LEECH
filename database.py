@@ -5,7 +5,7 @@ Database operations for user tracking and verification - FIXED
 import pymongo
 import logging
 from datetime import datetime, timedelta
-from config import MONGODB_URL, DATABASE_NAME, FREE_LEECH_LIMIT
+from config import MONGODB_URL, DATABASE_NAME, FREE_LEECH_LIMIT, VERIFY_TOKEN_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +82,12 @@ def increment_leech_attempts(user_id):
         return False
 
 def set_verification_token(user_id, token):
-    """Set verification token for user"""
+    """Set verification token for user with configurable expiry"""
     try:
-        expiry = datetime.now() + timedelta(hours=1)
+        # FIXED: Use VERIFY_TOKEN_TIMEOUT from config instead of hardcoded 1 hour
+        expiry = datetime.now() + timedelta(seconds=VERIFY_TOKEN_TIMEOUT)
+        logger.info(f"Setting token for user {user_id}, expires at: {expiry}")
+        
         users_collection.update_one(
             {"user_id": user_id},
             {
@@ -104,12 +107,16 @@ def set_verification_token(user_id, token):
 def verify_user(token):
     """Verify user by token"""
     try:
+        current_time = datetime.now()
+        logger.info(f"Attempting verification with token: {token[:10]}... at {current_time}")
+        
         user = users_collection.find_one({
             "verify_token": token,
-            "token_expiry": {"$gt": datetime.now()}
+            "token_expiry": {"$gt": current_time}  # Token must not be expired
         })
         
         if user:
+            logger.info(f"Token valid for user {user['user_id']}, marking as verified")
             # Mark user as verified
             users_collection.update_one(
                 {"user_id": user["user_id"]},
@@ -123,7 +130,9 @@ def verify_user(token):
                 }
             )
             return user["user_id"]
-        return None
+        else:
+            logger.warning(f"Token verification failed - token expired or invalid")
+            return None
     except Exception as e:
         logger.error(f"Error verifying user: {e}")
         return None
@@ -174,4 +183,18 @@ def needs_verification(user_id):
     
     return (not user.get("is_verified", False) and 
             user.get("leech_attempts", 0) >= FREE_LEECH_LIMIT)
-        
+
+def clean_expired_tokens():
+    """Clean up expired verification tokens (optional maintenance function)"""
+    try:
+        current_time = datetime.now()
+        result = users_collection.update_many(
+            {"token_expiry": {"$lt": current_time}},
+            {"$set": {"verify_token": None, "token_expiry": None}}
+        )
+        logger.info(f"Cleaned {result.modified_count} expired tokens")
+        return result.modified_count
+    except Exception as e:
+        logger.error(f"Error cleaning expired tokens: {e}")
+        return 0
+    
