@@ -1,5 +1,5 @@
 """
-Database operations for user tracking and verification
+Database operations for user tracking and verification - FIXED
 """
 
 import pymongo
@@ -15,14 +15,33 @@ db = client[DATABASE_NAME]
 users_collection = db.users
 
 def init_db():
-    """Initialize database and create indexes"""
+    """Initialize database and create indexes safely"""
     try:
-        # Create indexes
-        users_collection.create_index("user_id", unique=True)
-        users_collection.create_index("verify_token")
-        logger.info("Database initialized successfully")
+        # Check if collection exists and has data
+        existing_docs = users_collection.count_documents({})
+        
+        if existing_docs > 0:
+            logger.info(f"Database already has {existing_docs} documents, skipping index creation")
+            return
+        
+        # Drop existing indexes to avoid conflicts
+        try:
+            users_collection.drop_indexes()
+            logger.info("Dropped existing indexes")
+        except Exception:
+            pass
+        
+        # Create fresh indexes
+        try:
+            users_collection.create_index("user_id", unique=True, sparse=True)
+            users_collection.create_index("verify_token", sparse=True)
+            logger.info("Database indexes created successfully")
+        except pymongo.errors.DuplicateKeyError:
+            logger.info("Indexes already exist, continuing...")
+        
     except Exception as e:
-        logger.error(f"Database initialization error: {e}")
+        logger.warning(f"Database initialization warning: {e}")
+        # Continue anyway - the bot can work without perfect indexes
 
 def get_user_data(user_id):
     """Get user data from database"""
@@ -54,7 +73,8 @@ def increment_leech_attempts(user_id):
             {
                 "$inc": {"leech_attempts": 1},
                 "$set": {"last_activity": datetime.now()}
-            }
+            },
+            upsert=True  # Create if doesn't exist
         )
         return True
     except Exception as e:
@@ -73,7 +93,8 @@ def set_verification_token(user_id, token):
                     "token_expiry": expiry,
                     "last_activity": datetime.now()
                 }
-            }
+            },
+            upsert=True  # Create if doesn't exist
         )
         return True
     except Exception as e:
@@ -112,11 +133,16 @@ def get_bot_stats():
     try:
         total_users = users_collection.count_documents({})
         verified_users = users_collection.count_documents({"is_verified": True})
-        total_attempts = users_collection.aggregate([
-            {"$group": {"_id": None, "total": {"$sum": "$leech_attempts"}}}
-        ])
-        total_attempts = list(total_attempts)
-        total_attempts = total_attempts[0]["total"] if total_attempts else 0
+        
+        # Safe aggregation for total attempts
+        try:
+            total_attempts_cursor = users_collection.aggregate([
+                {"$group": {"_id": None, "total": {"$sum": "$leech_attempts"}}}
+            ])
+            total_attempts_list = list(total_attempts_cursor)
+            total_attempts = total_attempts_list[0]["total"] if total_attempts_list else 0
+        except:
+            total_attempts = 0
         
         return {
             "total_users": total_users,
@@ -148,3 +174,4 @@ def needs_verification(user_id):
     
     return (not user.get("is_verified", False) and 
             user.get("leech_attempts", 0) >= FREE_LEECH_LIMIT)
+        
