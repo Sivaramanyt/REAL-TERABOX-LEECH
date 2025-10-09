@@ -56,13 +56,16 @@ def extract_terabox_data(url):
         
         # Parse JSON response
         data = response.json()
+        logger.info(f"📄 API Response Keys: {list(data.keys())}")
         logger.info(f"📄 API Response: {str(data)[:300]}")
         
         # Check if API returned error
         if "❌ Error" in data:
             raise TeraboxException(data["❌ Error"])
         
-        if "✅ Status" not in data:
+        # Check for status - handle both formats (with and without space)
+        status_key = "✅ Status" if "✅ Status" in data else "✅Status"
+        if status_key not in data:
             raise TeraboxException("Invalid API response format")
         
         # Parse response - HANDLES MULTIPLE API FORMATS
@@ -73,18 +76,35 @@ def extract_terabox_data(url):
             "total_size": 0
         }
         
-        # FORMAT 1: NEW API FORMAT (Current)
+        # FORMAT 1: NEW API FORMAT (Current) - WITH SPACES AFTER EMOJIS
         # Response: {"✅ Status": "Success", "📄 Extracted Info": "Title: file.mp4, Size: 3.20 MB", "🔗 Direct Download Link": "url"}
+        
+        # Try both key formats (with and without space after emoji)
+        direct_link_key = None
+        extracted_info_key = None
+        
+        # Check for direct download link key
         if "🔗 Direct Download Link" in data:
+            direct_link_key = "🔗 Direct Download Link"
+        elif "🔗Direct Download Link" in data:
+            direct_link_key = "🔗Direct Download Link"
+        
+        # Check for extracted info key
+        if "📄 Extracted Info" in data:
+            extracted_info_key = "📄 Extracted Info"
+        elif "📄Extracted Info" in data:
+            extracted_info_key = "📄Extracted Info"
+        
+        if direct_link_key and direct_link_key in data:
             result["type"] = "file"
             
             # Extract filename and size from "📄 Extracted Info"
-            extracted_info = data.get("📄 Extracted Info", "")
+            extracted_info = data.get(extracted_info_key, "") if extracted_info_key else ""
             filename = "Terabox_File"
             filesize_str = "Unknown"
             
             # Parse: "Title: filename.mp4, Size: 3.20 MB"
-            if "Title:" in extracted_info:
+            if extracted_info and "Title:" in extracted_info:
                 try:
                     # Split by comma to separate title and size
                     parts = extracted_info.split(",")
@@ -101,7 +121,7 @@ def extract_terabox_data(url):
             result["title"] = filename
             result["files"].append({
                 "name": filename,
-                "url": data["🔗 Direct Download Link"],
+                "url": data[direct_link_key],
                 "size": parse_size(filesize_str),
                 "size_str": filesize_str
             })
@@ -110,7 +130,6 @@ def extract_terabox_data(url):
             logger.info(f"✅ Extracted file: {filename} ({filesize_str})")
         
         # FORMAT 2: OLD API FORMAT (Backward compatibility)
-        # Response: {"📄 File Name": "file.mp4", "🔗 Download Link": "url", "📦 File Size": "3.20 MB"}
         elif "📄 File Name" in data and "🔗 Download Link" in data:
             result["type"] = "file"
             result["title"] = data["📄 File Name"]
@@ -125,7 +144,6 @@ def extract_terabox_data(url):
             logger.info(f"✅ Extracted file (old format): {data['📄 File Name']}")
         
         # FORMAT 3: FOLDER FORMAT
-        # Response: {"📁 Folder Name": "folder", "📁 Folder Contents": [{...}, {...}]}
         elif "📁 Folder Contents" in data:
             result["type"] = "folder"
             result["title"] = data.get("📁 Folder Name", "Terabox Folder")
@@ -133,7 +151,9 @@ def extract_terabox_data(url):
             for item in data["📁 Folder Contents"]:
                 if isinstance(item, dict):
                     # Check for both old and new formats
-                    download_link = item.get("Download Link") or item.get("🔗 Direct Download Link")
+                    download_link = (item.get("Download Link") or 
+                                   item.get("🔗 Direct Download Link") or 
+                                   item.get("🔗Direct Download Link"))
                     file_name = item.get("File Name") or item.get("Title", "Unknown")
                     file_size_str = item.get("File Size") or item.get("Size", "Unknown")
                     
