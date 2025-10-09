@@ -1,6 +1,6 @@
 """
 Terabox API Integration - WORKING VERSION
-Based on processor-1.py
+Based on processor-1.py with ALL DOMAINS
 """
 
 import requests
@@ -16,7 +16,25 @@ class TeraboxException(Exception):
     pass
 
 def is_terabox_url(url):
-    terabox_domains = ['terabox.com', 'teraboxapp.com', '1024tera.com', '4funbox.com', 'terabox.app', 'terabox.fun', 'teraboxshare.com']
+    """Check if URL is a valid Terabox link - UPDATED with ALL domains"""
+    terabox_domains = [
+        # Original domains
+        'terabox.com',
+        'teraboxapp.com',
+        '1024tera.com',
+        '4funbox.com',
+        'terabox.app',
+        'terabox.fun',
+        
+        # NEW domains added
+        'teraboxshare.com',
+        'teraboxurl.com',
+        '1024terabox.com',
+        'terafileshare.com',
+        'teraboxlink.com',
+        'terasharelink.com'
+    ]
+    
     return any(domain in url.lower() for domain in terabox_domains)
 
 def extract_terabox_data(url):
@@ -123,4 +141,4 @@ def format_size(size_bytes):
         return f"{size_bytes:.2f} PB"
     except:
         return "Unknown"
-            
+        
