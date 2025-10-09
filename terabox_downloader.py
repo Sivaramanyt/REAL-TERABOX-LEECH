@@ -1,11 +1,12 @@
 """
-Terabox File Downloader - WITH LIVE TELEGRAM PROGRESS
-Shows real-time download progress to users
+Terabox File Downloader - CHUNKED ENCODING FIX
+Handles ChunkedEncodingError and shows live progress
 """
 
 import os
 import asyncio
-import requests
+import urllib3
+import certifi
 import logging
 import subprocess
 import time
@@ -20,10 +21,10 @@ logger = logging.getLogger(__name__)
 # Configuration
 DOWNLOAD_DIR = "downloads"
 THUMBNAIL_DIR = "thumbnails"
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
-CHUNK_SIZE = 4096  # 4KB chunks
+MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024
+CHUNK_SIZE = 8192  # 8KB chunks for better stability
 MAX_RETRIES = 3
-PROGRESS_UPDATE_INTERVAL = 3  # Update Telegram message every 3 seconds
+PROGRESS_UPDATE_INTERVAL = 3
 
 # Video file extensions
 VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
@@ -31,7 +32,9 @@ VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m
 # Thread pool
 executor = ThreadPoolExecutor(max_workers=3)
 
-# Progress bar generator
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 def create_progress_bar(percentage):
     """Create a visual progress bar"""
     filled = int(percentage / 10)
@@ -58,16 +61,16 @@ async def update_progress_message(message, downloaded, total_size, speed, start_
         )
         
         await message.edit_text(progress_text, parse_mode='Markdown')
-    except (BadRequest, RetryAfter) as e:
-        logger.debug(f"Progress update skipped: {e}")
+    except (BadRequest, RetryAfter):
+        pass
     except Exception as e:
-        logger.warning(f"Progress update error: {e}")
+        logger.debug(f"Progress update error: {e}")
 
 def download_file_sync_with_progress(url, file_path, total_size, update_func, message_id):
     """
-    Synchronous download with progress callback
+    Synchronous download using urllib3 - FIXES ChunkedEncodingError
     """
-    logger.info(f"⬇️ Starting download with live progress: {file_path}")
+    logger.info(f"⬇️ Starting download: {file_path}")
     
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -78,45 +81,56 @@ def download_file_sync_with_progress(url, file_path, total_size, update_func, me
                 start_byte = os.path.getsize(file_path)
                 logger.info(f"📍 Resuming from byte {start_byte}")
             
-            session = requests.Session()
-            adapter = requests.adapters.HTTPAdapter(
-                pool_connections=10,
-                pool_maxsize=20,
-                max_retries=0
+            # Create HTTP pool manager
+            http = urllib3.PoolManager(
+                cert_reqs='CERT_REQUIRED',
+                ca_certs=certifi.where(),
+                maxsize=10,
+                block=False
             )
-            session.mount('http://', adapter)
-            session.mount('https://', adapter)
             
-            session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': '*/*',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive'
-            })
-            
+            # Warm-up connection
             if attempt == 1:
                 try:
                     logger.info("🔥 Warming up connection...")
-                    session.head(url, timeout=15)
+                    http.request('HEAD', url, timeout=15.0)
                     time.sleep(0.5)
                 except:
                     pass
             
-            headers = {}
+            # Set headers
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': '*/*',
+                'Connection': 'keep-alive'
+            }
+            
             if start_byte > 0:
                 headers['Range'] = f'bytes={start_byte}-'
             
-            response = session.get(
+            # Download with streaming
+            response = http.request(
+                'GET',
                 url,
                 headers=headers,
-                stream=True,
-                timeout=(45, 900)
+                preload_content=False,  # CRITICAL for chunked encoding
+                timeout=urllib3.Timeout(connect=45.0, read=900.0)
             )
-            response.raise_for_status()
             
+            if response.status not in [200, 206]:
+                raise Exception(f"HTTP {response.status}")
+            
+            # Get total size
             if not total_size:
-                total_size = int(response.headers.get('content-length', 0)) + start_byte
+                content_length = response.headers.get('Content-Length')
+                if content_length:
+                    total_size = int(content_length) + start_byte
+                else:
+                    total_size = 0
             
+            logger.info(f"📦 Total size: {format_size(total_size)}")
+            
+            # Download
             mode = 'ab' if start_byte > 0 else 'wb'
             downloaded = start_byte
             start_time = time.time()
@@ -130,29 +144,35 @@ def download_file_sync_with_progress(url, file_path, total_size, update_func, me
                 'start_time': start_time
             }
             
-            with open(file_path, mode, buffering=8192) as f:
-                for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
+            with open(file_path, mode) as f:
+                while True:
+                    chunk = response.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    
+                    current_time = time.time()
+                    
+                    # Update progress every 3 seconds
+                    if current_time - last_update_time >= PROGRESS_UPDATE_INTERVAL:
+                        bytes_since_update = downloaded - last_update_bytes
+                        time_since_update = current_time - last_update_time
+                        current_speed = bytes_since_update / time_since_update if time_since_update > 0 else 0
                         
-                        current_time = time.time()
+                        progress_state['downloaded'] = downloaded
+                        progress_state['speed'] = current_speed
                         
-                        if current_time - last_update_time >= PROGRESS_UPDATE_INTERVAL:
-                            bytes_since_update = downloaded - last_update_bytes
-                            time_since_update = current_time - last_update_time
-                            current_speed = bytes_since_update / time_since_update if time_since_update > 0 else 0
-                            
-                            progress_state['downloaded'] = downloaded
-                            progress_state['speed'] = current_speed
-                            
-                            if update_func:
-                                update_func(progress_state)
-                            
-                            last_update_time = current_time
-                            last_update_bytes = downloaded
+                        if update_func:
+                            update_func(progress_state)
+                        
+                        logger.info(f"📥 Downloaded: {format_size(downloaded)} - Speed: {format_size(current_speed)}/s")
+                        
+                        last_update_time = current_time
+                        last_update_bytes = downloaded
             
-            session.close()
+            response.release_conn()
             
             final_size = os.path.getsize(file_path)
             total_time = time.time() - start_time
@@ -167,12 +187,7 @@ def download_file_sync_with_progress(url, file_path, total_size, update_func, me
             return True
             
         except Exception as e:
-            logger.warning(f"⚠️ Attempt {attempt} failed: {e.__class__.__name__}")
-            
-            try:
-                session.close()
-            except:
-                pass
+            logger.warning(f"⚠️ Attempt {attempt} failed: {e.__class__.__name__}: {str(e)}")
             
             if attempt < MAX_RETRIES:
                 wait_time = attempt * 2
@@ -185,9 +200,7 @@ def download_file_sync_with_progress(url, file_path, total_size, update_func, me
                 raise Exception(f"Download failed: {e}")
 
 async def download_file(url, file_path, total_size=0, status_message=None):
-    """
-    Async wrapper with live Telegram progress updates
-    """
+    """Async wrapper with live Telegram progress updates"""
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     
     progress_data = {'downloaded': 0, 'total_size': total_size, 'speed': 0, 'start_time': time.time()}
@@ -360,4 +373,4 @@ def get_safe_filename(filename):
         name, ext = os.path.splitext(filename)
         filename = name[:200-len(ext)] + ext
     return filename
-        
+            
