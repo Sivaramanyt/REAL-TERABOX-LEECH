@@ -1,6 +1,6 @@
 """
-Terabox File Downloader - SPEED OPTIMIZED
-Multi-threaded download + Larger chunks + Thumbnails
+Terabox File Downloader - WITH RETRY & RESUME
+Handles network interruptions and slow connections
 """
 
 import os
@@ -18,124 +18,98 @@ logger = logging.getLogger(__name__)
 DOWNLOAD_DIR = "downloads"
 THUMBNAIL_DIR = "thumbnails"
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
-CHUNK_SIZE = 8 * 1024 * 1024  # 8MB chunks (increased from 1MB)
-CONCURRENT_DOWNLOADS = 4  # Number of parallel download threads
+CHUNK_SIZE = 8 * 1024 * 1024  # 8MB chunks
+MAX_RETRIES = 3  # Retry failed downloads 3 times
+CONNECT_TIMEOUT = 60  # Seconds to wait for connection
+DOWNLOAD_TIMEOUT = 7200  # 2 hours total download time
 
 # Video file extensions
 VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
 
-async def download_file_chunk(session, url, start, end, file_path, chunk_num):
-    """Download a specific chunk of the file"""
-    try:
-        headers = {'Range': f'bytes={start}-{end}'}
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=600)) as response:
-            if response.status in [200, 206]:  # 206 = Partial Content
-                chunk_data = await response.read()
-                
-                # Write chunk to temporary file
-                chunk_file = f"{file_path}.part{chunk_num}"
-                with open(chunk_file, 'wb') as f:
-                    f.write(chunk_data)
-                
-                logger.info(f"✅ Chunk {chunk_num} downloaded: {format_size(len(chunk_data))}")
-                return chunk_num, len(chunk_data)
-            else:
-                raise Exception(f"Chunk {chunk_num} failed with status {response.status}")
-    except Exception as e:
-        logger.error(f"❌ Chunk {chunk_num} error: {e}")
-        raise
-
 async def download_file(url, file_path, progress_callback=None):
     """
-    Multi-threaded file download with progress tracking
-    SPEED OPTIMIZED: 4x parallel downloads
+    Download file with retry and resume capability
+    FIXED: Handles "Response payload is not completed" errors
     """
-    try:
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        logger.info(f"⬇️ Starting SPEED download: {file_path}")
-        
-        async with aiohttp.ClientSession() as session:
-            # Get file size first
-            async with session.head(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                total_size = int(response.headers.get('content-length', 0))
-                supports_range = 'bytes' in response.headers.get('accept-ranges', '')
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    logger.info(f"⬇️ Starting download: {file_path}")
+    
+    # Try multiple times if download fails
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            logger.info(f"🔄 Download attempt {attempt}/{MAX_RETRIES}")
             
-            logger.info(f"📦 File size: {format_size(total_size)}, Range support: {supports_range}")
+            # Check if partial file exists (for resume)
+            start_byte = 0
+            if os.path.exists(file_path) and attempt > 1:
+                start_byte = os.path.getsize(file_path)
+                logger.info(f"📍 Resuming from byte {start_byte}")
             
-            # If server doesn't support range requests, fall back to single download
-            if not supports_range or total_size < 5 * 1024 * 1024:  # Less than 5MB
-                logger.info("📥 Using single-threaded download")
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=3600)) as response:
-                    if response.status != 200:
+            # Create session with longer timeouts
+            timeout = aiohttp.ClientTimeout(
+                total=DOWNLOAD_TIMEOUT,
+                connect=CONNECT_TIMEOUT,
+                sock_read=300  # 5 minutes per chunk read
+            )
+            
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                # Set range header for resume
+                headers = {}
+                if start_byte > 0:
+                    headers['Range'] = f'bytes={start_byte}-'
+                
+                async with session.get(url, headers=headers) as response:
+                    if response.status not in [200, 206]:  # 206 = Partial Content
                         raise Exception(f"Download failed with status {response.status}")
                     
-                    downloaded = 0
-                    with open(file_path, 'wb') as f:
+                    # Get total size
+                    content_length = response.headers.get('content-length')
+                    if content_length:
+                        total_size = int(content_length) + start_byte
+                        logger.info(f"📦 Total file size: {format_size(total_size)}")
+                    else:
+                        total_size = 0
+                        logger.info("📦 File size: Unknown")
+                    
+                    # Open file in append mode if resuming
+                    mode = 'ab' if start_byte > 0 else 'wb'
+                    downloaded = start_byte
+                    
+                    with open(file_path, mode) as f:
+                        # Download in chunks with progress
                         async for chunk in response.content.iter_chunked(CHUNK_SIZE):
                             f.write(chunk)
                             downloaded += len(chunk)
+                            
                             if progress_callback:
-                                await progress_callback(downloaded, total_size)
+                                await progress_callback(downloaded, total_size if total_size else downloaded)
+                            
+                            # Log progress every 10MB
+                            if downloaded % (10 * 1024 * 1024) < CHUNK_SIZE:
+                                logger.info(f"📥 Downloaded: {format_size(downloaded)}")
                     
-                    logger.info(f"✅ Download completed: {format_size(downloaded)}")
+                    final_size = os.path.getsize(file_path)
+                    logger.info(f"✅ Download completed: {format_size(final_size)}")
                     return True
+                    
+        except (asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ServerDisconnectedError) as e:
+            logger.warning(f"⚠️ Attempt {attempt} failed: {e.__class__.__name__}")
             
-            # Multi-threaded download for large files
-            logger.info(f"🚀 Using {CONCURRENT_DOWNLOADS}-thread download")
-            
-            # Calculate chunk ranges
-            chunk_size = total_size // CONCURRENT_DOWNLOADS
-            download_tasks = []
-            
-            for i in range(CONCURRENT_DOWNLOADS):
-                start = i * chunk_size
-                end = start + chunk_size - 1 if i < CONCURRENT_DOWNLOADS - 1 else total_size - 1
+            if attempt < MAX_RETRIES:
+                wait_time = attempt * 5  # Wait 5, 10, 15 seconds
+                logger.info(f"⏳ Retrying in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"❌ All {MAX_RETRIES} download attempts failed")
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                raise Exception(f"Download failed after {MAX_RETRIES} attempts: {e}")
                 
-                task = download_file_chunk(session, url, start, end, file_path, i)
-                download_tasks.append(task)
-            
-            # Download all chunks in parallel
-            chunk_results = await asyncio.gather(*download_tasks, return_exceptions=True)
-            
-            # Check for errors
-            for result in chunk_results:
-                if isinstance(result, Exception):
-                    raise result
-            
-            # Merge chunks into final file
-            logger.info("🔗 Merging chunks...")
-            with open(file_path, 'wb') as final_file:
-                for i in range(CONCURRENT_DOWNLOADS):
-                    chunk_file = f"{file_path}.part{i}"
-                    if os.path.exists(chunk_file):
-                        with open(chunk_file, 'rb') as cf:
-                            final_file.write(cf.read())
-                        os.remove(chunk_file)  # Cleanup chunk
-            
-            downloaded_size = os.path.getsize(file_path)
-            logger.info(f"✅ SPEED download completed: {format_size(downloaded_size)}")
-            return True
-                
-    except asyncio.TimeoutError:
-        logger.error("❌ Download timeout")
-        cleanup_chunks(file_path)
-        raise Exception("Download timed out")
-    except Exception as e:
-        logger.error(f"❌ Download error: {e}")
-        cleanup_chunks(file_path)
-        raise
-
-def cleanup_chunks(file_path):
-    """Remove partial chunk files"""
-    try:
-        for i in range(CONCURRENT_DOWNLOADS):
-            chunk_file = f"{file_path}.part{i}"
-            if os.path.exists(chunk_file):
-                os.remove(chunk_file)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-    except Exception as e:
-        logger.error(f"Cleanup error: {e}")
+        except Exception as e:
+            logger.error(f"❌ Download error: {e}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise
 
 async def generate_video_thumbnail(video_path, thumbnail_path=None):
     """Generate thumbnail from video using ffmpeg"""
