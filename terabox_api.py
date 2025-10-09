@@ -57,18 +57,19 @@ def extract_terabox_data(url):
         # Parse JSON response
         data = response.json()
         logger.info(f"📄 API Response Keys: {list(data.keys())}")
-        logger.info(f"📄 API Response: {str(data)[:300]}")
+        logger.info(f"📄 Full API Response: {str(data)[:500]}")
         
-        # Check if API returned error
-        if "❌ Error" in data:
-            raise TeraboxException(data["❌ Error"])
+        # Check if API returned error - search for "Error" in any key
+        for key in data.keys():
+            if "Error" in key:
+                raise TeraboxException(data[key])
         
-        # Check for status - handle both formats (with and without space)
-        status_key = "✅ Status" if "✅ Status" in data else "✅Status"
-        if status_key not in data:
+        # Check for status - search for "Status" in any key
+        has_status = any("Status" in key for key in data.keys())
+        if not has_status:
             raise TeraboxException("Invalid API response format")
         
-        # Parse response - HANDLES MULTIPLE API FORMATS
+        # Parse response
         result = {
             "type": None,
             "title": None,
@@ -76,29 +77,51 @@ def extract_terabox_data(url):
             "total_size": 0
         }
         
-        # FORMAT 1: NEW API FORMAT (Current) - WITH SPACES AFTER EMOJIS
-        # Response: {"✅ Status": "Success", "📄 Extracted Info": "Title: file.mp4, Size: 3.20 MB", "🔗 Direct Download Link": "url"}
-        
-        # Try both key formats (with and without space after emoji)
+        # DYNAMIC KEY DETECTION - Find keys by searching for keywords
         direct_link_key = None
         extracted_info_key = None
+        file_name_key = None
+        download_link_key = None
+        file_size_key = None
+        folder_contents_key = None
         
-        # Check for direct download link key
-        if "🔗 Direct Download Link" in data:
-            direct_link_key = "🔗 Direct Download Link"
-        elif "🔗Direct Download Link" in data:
-            direct_link_key = "🔗Direct Download Link"
+        for key in data.keys():
+            # Look for direct download link (new format)
+            if "Direct Download Link" in key:
+                direct_link_key = key
+                logger.info(f"✅ Found download link key: '{key}'")
+            
+            # Look for extracted info (new format)
+            if "Extracted Info" in key:
+                extracted_info_key = key
+                logger.info(f"✅ Found extracted info key: '{key}'")
+            
+            # Look for file name (old format)
+            if "File Name" in key and "Folder" not in key:
+                file_name_key = key
+                logger.info(f"✅ Found file name key: '{key}'")
+            
+            # Look for download link (old format)
+            if "Download Link" in key and "Direct" not in key:
+                download_link_key = key
+                logger.info(f"✅ Found download link key (old): '{key}'")
+            
+            # Look for file size
+            if "File Size" in key:
+                file_size_key = key
+                logger.info(f"✅ Found file size key: '{key}'")
+            
+            # Look for folder contents
+            if "Folder Contents" in key:
+                folder_contents_key = key
+                logger.info(f"✅ Found folder contents key: '{key}'")
         
-        # Check for extracted info key
-        if "📄 Extracted Info" in data:
-            extracted_info_key = "📄 Extracted Info"
-        elif "📄Extracted Info" in data:
-            extracted_info_key = "📄Extracted Info"
-        
+        # FORMAT 1: NEW API FORMAT
+        # Has: Direct Download Link + Extracted Info
         if direct_link_key and direct_link_key in data:
             result["type"] = "file"
             
-            # Extract filename and size from "📄 Extracted Info"
+            # Extract filename and size from extracted info
             extracted_info = data.get(extracted_info_key, "") if extracted_info_key else ""
             filename = "Terabox_File"
             filesize_str = "Unknown"
@@ -106,17 +129,17 @@ def extract_terabox_data(url):
             # Parse: "Title: filename.mp4, Size: 3.20 MB"
             if extracted_info and "Title:" in extracted_info:
                 try:
-                    # Split by comma to separate title and size
                     parts = extracted_info.split(",")
-                    
                     for part in parts:
                         part = part.strip()
                         if "Title:" in part:
                             filename = part.replace("Title:", "").strip()
                         elif "Size:" in part:
                             filesize_str = part.replace("Size:", "").strip()
+                    
+                    logger.info(f"📝 Parsed - Filename: {filename}, Size: {filesize_str}")
                 except Exception as e:
-                    logger.warning(f"Failed to parse extracted info: {e}")
+                    logger.warning(f"⚠️ Failed to parse extracted info: {e}")
             
             result["title"] = filename
             result["files"].append({
@@ -127,43 +150,61 @@ def extract_terabox_data(url):
             })
             result["total_size"] = parse_size(filesize_str)
             
-            logger.info(f"✅ Extracted file: {filename} ({filesize_str})")
+            logger.info(f"✅ Successfully extracted file: {filename} ({filesize_str})")
         
-        # FORMAT 2: OLD API FORMAT (Backward compatibility)
-        elif "📄 File Name" in data and "🔗 Download Link" in data:
+        # FORMAT 2: OLD API FORMAT
+        # Has: File Name + Download Link
+        elif file_name_key and download_link_key:
             result["type"] = "file"
-            result["title"] = data["📄 File Name"]
+            result["title"] = data[file_name_key]
+            
+            size_str = data.get(file_size_key, "Unknown") if file_size_key else "Unknown"
+            
             result["files"].append({
-                "name": data["📄 File Name"],
-                "url": data["🔗 Download Link"],
-                "size": parse_size(data.get("📦 File Size", "0")),
-                "size_str": data.get("📦 File Size", "Unknown")
+                "name": data[file_name_key],
+                "url": data[download_link_key],
+                "size": parse_size(size_str),
+                "size_str": size_str
             })
             result["total_size"] = result["files"][0]["size"]
             
-            logger.info(f"✅ Extracted file (old format): {data['📄 File Name']}")
+            logger.info(f"✅ Extracted file (old format): {data[file_name_key]}")
         
         # FORMAT 3: FOLDER FORMAT
-        elif "📁 Folder Contents" in data:
+        elif folder_contents_key:
             result["type"] = "folder"
-            result["title"] = data.get("📁 Folder Name", "Terabox Folder")
             
-            for item in data["📁 Folder Contents"]:
+            # Find folder name key
+            folder_name_key = None
+            for key in data.keys():
+                if "Folder Name" in key:
+                    folder_name_key = key
+                    break
+            
+            result["title"] = data.get(folder_name_key, "Terabox Folder") if folder_name_key else "Terabox Folder"
+            
+            for item in data[folder_contents_key]:
                 if isinstance(item, dict):
-                    # Check for both old and new formats
-                    download_link = (item.get("Download Link") or 
-                                   item.get("🔗 Direct Download Link") or 
-                                   item.get("🔗Direct Download Link"))
-                    file_name = item.get("File Name") or item.get("Title", "Unknown")
-                    file_size_str = item.get("File Size") or item.get("Size", "Unknown")
+                    # Find keys dynamically for each item
+                    item_download_link = None
+                    item_name = "Unknown"
+                    item_size = "Unknown"
                     
-                    if download_link:
-                        file_size = parse_size(file_size_str)
+                    for key in item.keys():
+                        if "Download Link" in key:
+                            item_download_link = item[key]
+                        if "File Name" in key or "Title" in key:
+                            item_name = item[key]
+                        if "Size" in key:
+                            item_size = item[key]
+                    
+                    if item_download_link:
+                        file_size = parse_size(item_size)
                         result["files"].append({
-                            "name": file_name,
-                            "url": download_link,
+                            "name": item_name,
+                            "url": item_download_link,
                             "size": file_size,
-                            "size_str": file_size_str
+                            "size_str": item_size
                         })
                         result["total_size"] += file_size
             
@@ -171,7 +212,10 @@ def extract_terabox_data(url):
         
         # Validate we got files
         if not result["files"]:
-            logger.error(f"❌ No files extracted. Full API response: {data}")
+            logger.error(f"❌ No files extracted!")
+            logger.error(f"❌ Available keys: {list(data.keys())}")
+            logger.error(f"❌ Found keys: direct_link={direct_link_key}, extracted_info={extracted_info_key}")
+            logger.error(f"❌ Full response: {data}")
             raise TeraboxException("No downloadable files found in response")
         
         logger.info(f"✅ Successfully extracted {len(result['files'])} file(s)")
@@ -187,6 +231,8 @@ def extract_terabox_data(url):
         raise  # Re-raise our custom exceptions
     except Exception as e:
         logger.error(f"❌ Terabox extraction error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise TeraboxException(f"Unexpected error: {str(e)}")
 
 def parse_size(size_str):
@@ -239,4 +285,4 @@ def format_size(size_bytes):
         return f"{size_bytes:.2f} PB"
     except:
         return "Unknown"
-        
+                
