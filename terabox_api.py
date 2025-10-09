@@ -35,6 +35,13 @@ def extract_terabox_data(url):
     """
     Extract file information from Terabox URL
     Returns: dict with file details or raises TeraboxException
+    
+    API Response Format:
+    {
+        "✅ Status": "Success",
+        "📄 Extracted Info": "Title: file.mp4, Size: 3.20 MB, Direct Download Link: https://...",
+        "🔗 ShortLink": "shortlink_url"
+    }
     """
     try:
         logger.info(f"🔍 Extracting Terabox data from: {url}")
@@ -57,19 +64,18 @@ def extract_terabox_data(url):
         # Parse JSON response
         data = response.json()
         logger.info(f"📄 API Response Keys: {list(data.keys())}")
-        logger.info(f"📄 Full API Response: {str(data)[:500]}")
         
-        # Check if API returned error - search for "Error" in any key
+        # Check if API returned error
         for key in data.keys():
             if "Error" in key:
                 raise TeraboxException(data[key])
         
-        # Check for status - search for "Status" in any key
+        # Check for status
         has_status = any("Status" in key for key in data.keys())
         if not has_status:
             raise TeraboxException("Invalid API response format")
         
-        # Parse response
+        # Initialize result structure
         result = {
             "type": None,
             "title": None,
@@ -77,148 +83,64 @@ def extract_terabox_data(url):
             "total_size": 0
         }
         
-        # DYNAMIC KEY DETECTION - Find keys by searching for keywords
-        direct_link_key = None
+        # Find "Extracted Info" key (it contains all the data)
         extracted_info_key = None
-        file_name_key = None
-        download_link_key = None
-        file_size_key = None
-        folder_contents_key = None
-        
         for key in data.keys():
-            # Look for direct download link (new format)
-            if "Direct Download Link" in key:
-                direct_link_key = key
-                logger.info(f"✅ Found download link key: '{key}'")
-            
-            # Look for extracted info (new format)
             if "Extracted Info" in key:
                 extracted_info_key = key
                 logger.info(f"✅ Found extracted info key: '{key}'")
-            
-            # Look for file name (old format)
-            if "File Name" in key and "Folder" not in key:
-                file_name_key = key
-                logger.info(f"✅ Found file name key: '{key}'")
-            
-            # Look for download link (old format)
-            if "Download Link" in key and "Direct" not in key:
-                download_link_key = key
-                logger.info(f"✅ Found download link key (old): '{key}'")
-            
-            # Look for file size
-            if "File Size" in key:
-                file_size_key = key
-                logger.info(f"✅ Found file size key: '{key}'")
-            
-            # Look for folder contents
-            if "Folder Contents" in key:
-                folder_contents_key = key
-                logger.info(f"✅ Found folder contents key: '{key}'")
+                break
         
-        # FORMAT 1: NEW API FORMAT
-        # Has: Direct Download Link + Extracted Info
-        if direct_link_key and direct_link_key in data:
-            result["type"] = "file"
-            
-            # Extract filename and size from extracted info
-            extracted_info = data.get(extracted_info_key, "") if extracted_info_key else ""
-            filename = "Terabox_File"
-            filesize_str = "Unknown"
-            
-            # Parse: "Title: filename.mp4, Size: 3.20 MB"
-            if extracted_info and "Title:" in extracted_info:
-                try:
-                    parts = extracted_info.split(",")
-                    for part in parts:
-                        part = part.strip()
-                        if "Title:" in part:
-                            filename = part.replace("Title:", "").strip()
-                        elif "Size:" in part:
-                            filesize_str = part.replace("Size:", "").strip()
-                    
-                    logger.info(f"📝 Parsed - Filename: {filename}, Size: {filesize_str}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to parse extracted info: {e}")
-            
-            result["title"] = filename
-            result["files"].append({
-                "name": filename,
-                "url": data[direct_link_key],
-                "size": parse_size(filesize_str),
-                "size_str": filesize_str
-            })
-            result["total_size"] = parse_size(filesize_str)
-            
-            logger.info(f"✅ Successfully extracted file: {filename} ({filesize_str})")
+        if not extracted_info_key:
+            raise TeraboxException("No extracted info found in API response")
         
-        # FORMAT 2: OLD API FORMAT
-        # Has: File Name + Download Link
-        elif file_name_key and download_link_key:
-            result["type"] = "file"
-            result["title"] = data[file_name_key]
-            
-            size_str = data.get(file_size_key, "Unknown") if file_size_key else "Unknown"
-            
-            result["files"].append({
-                "name": data[file_name_key],
-                "url": data[download_link_key],
-                "size": parse_size(size_str),
-                "size_str": size_str
-            })
-            result["total_size"] = result["files"][0]["size"]
-            
-            logger.info(f"✅ Extracted file (old format): {data[file_name_key]}")
+        # Get the extracted info string
+        extracted_info = data[extracted_info_key]
+        logger.info(f"📄 Extracted Info Content: {extracted_info}")
         
-        # FORMAT 3: FOLDER FORMAT
-        elif folder_contents_key:
-            result["type"] = "folder"
-            
-            # Find folder name key
-            folder_name_key = None
-            for key in data.keys():
-                if "Folder Name" in key:
-                    folder_name_key = key
-                    break
-            
-            result["title"] = data.get(folder_name_key, "Terabox Folder") if folder_name_key else "Terabox Folder"
-            
-            for item in data[folder_contents_key]:
-                if isinstance(item, dict):
-                    # Find keys dynamically for each item
-                    item_download_link = None
-                    item_name = "Unknown"
-                    item_size = "Unknown"
-                    
-                    for key in item.keys():
-                        if "Download Link" in key:
-                            item_download_link = item[key]
-                        if "File Name" in key or "Title" in key:
-                            item_name = item[key]
-                        if "Size" in key:
-                            item_size = item[key]
-                    
-                    if item_download_link:
-                        file_size = parse_size(item_size)
-                        result["files"].append({
-                            "name": item_name,
-                            "url": item_download_link,
-                            "size": file_size,
-                            "size_str": item_size
-                        })
-                        result["total_size"] += file_size
-            
-            logger.info(f"✅ Extracted folder with {len(result['files'])} files")
+        # Parse the extracted info string
+        # Format: "Title: filename.mp4, Size: 3.20 MB, Direct Download Link: https://..."
+        filename = "Terabox_File"
+        filesize_str = "Unknown"
+        download_url = None
         
-        # Validate we got files
-        if not result["files"]:
-            logger.error(f"❌ No files extracted!")
-            logger.error(f"❌ Available keys: {list(data.keys())}")
-            logger.error(f"❌ Found keys: direct_link={direct_link_key}, extracted_info={extracted_info_key}")
-            logger.error(f"❌ Full response: {data}")
-            raise TeraboxException("No downloadable files found in response")
+        if "Title:" in extracted_info:
+            # Split by comma to get individual parts
+            parts = extracted_info.split(", ")
+            
+            for part in parts:
+                part = part.strip()
+                
+                if part.startswith("Title:"):
+                    filename = part.replace("Title:", "").strip()
+                    logger.info(f"📝 Filename: {filename}")
+                
+                elif part.startswith("Size:"):
+                    filesize_str = part.replace("Size:", "").strip()
+                    logger.info(f"📦 Size: {filesize_str}")
+                
+                elif "Direct Download Link:" in part:
+                    # The download link might have commas in it, so join remaining parts
+                    download_url = part.split("Direct Download Link:", 1)[1].strip()
+                    logger.info(f"🔗 Download URL: {download_url[:80]}...")
         
-        logger.info(f"✅ Successfully extracted {len(result['files'])} file(s)")
+        # Validate we got the download URL
+        if not download_url:
+            logger.error(f"❌ Could not parse download link from: {extracted_info}")
+            raise TeraboxException("Could not find download link in extracted info")
+        
+        # Build result
+        result["type"] = "file"
+        result["title"] = filename
+        result["files"].append({
+            "name": filename,
+            "url": download_url,
+            "size": parse_size(filesize_str),
+            "size_str": filesize_str
+        })
+        result["total_size"] = parse_size(filesize_str)
+        
+        logger.info(f"✅ Successfully extracted: {filename} ({filesize_str})")
         return result
         
     except requests.exceptions.Timeout:
@@ -285,4 +207,4 @@ def format_size(size_bytes):
         return f"{size_bytes:.2f} PB"
     except:
         return "Unknown"
-                
+            
