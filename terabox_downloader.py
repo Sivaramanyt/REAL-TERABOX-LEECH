@@ -1,12 +1,11 @@
 """
-Terabox File Downloader - CHUNKED ENCODING FIX
-Handles ChunkedEncodingError and shows live progress
+Terabox File Downloader - WORKING VERSION
+Handles redirects and chunked encoding properly
 """
 
 import os
 import asyncio
-import urllib3
-import certifi
+import requests
 import logging
 import subprocess
 import time
@@ -22,7 +21,7 @@ logger = logging.getLogger(__name__)
 DOWNLOAD_DIR = "downloads"
 THUMBNAIL_DIR = "thumbnails"
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024
-CHUNK_SIZE = 8192  # 8KB chunks for better stability
+CHUNK_SIZE = 8192  # 8KB chunks
 MAX_RETRIES = 3
 PROGRESS_UPDATE_INTERVAL = 3
 
@@ -31,9 +30,6 @@ VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m
 
 # Thread pool
 executor = ThreadPoolExecutor(max_workers=3)
-
-# Disable SSL warnings
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def create_progress_bar(percentage):
     """Create a visual progress bar"""
@@ -68,7 +64,7 @@ async def update_progress_message(message, downloaded, total_size, speed, start_
 
 def download_file_sync_with_progress(url, file_path, total_size, update_func, message_id):
     """
-    Synchronous download using urllib3 - FIXES ChunkedEncodingError
+    Synchronous download with proper chunked encoding handling
     """
     logger.info(f"⬇️ Starting download: {file_path}")
     
@@ -81,48 +77,51 @@ def download_file_sync_with_progress(url, file_path, total_size, update_func, me
                 start_byte = os.path.getsize(file_path)
                 logger.info(f"📍 Resuming from byte {start_byte}")
             
-            # Create HTTP pool manager
-            http = urllib3.PoolManager(
-                cert_reqs='CERT_REQUIRED',
-                ca_certs=certifi.where(),
-                maxsize=10,
-                block=False
+            # Create session with retry adapter
+            session = requests.Session()
+            
+            # CRITICAL: Disable automatic decompression to handle chunked encoding properly
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=5,
+                pool_maxsize=10,
+                max_retries=0
             )
+            session.mount('http://', adapter)
+            session.mount('https://', adapter)
             
-            # Warm-up connection
-            if attempt == 1:
-                try:
-                    logger.info("🔥 Warming up connection...")
-                    http.request('HEAD', url, timeout=15.0)
-                    time.sleep(0.5)
-                except:
-                    pass
-            
-            # Set headers
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': '*/*',
+                'Accept-Encoding': 'identity',  # CRITICAL: Disable gzip/deflate
                 'Connection': 'keep-alive'
             }
             
             if start_byte > 0:
                 headers['Range'] = f'bytes={start_byte}-'
             
+            # Warm-up on first attempt
+            if attempt == 1:
+                try:
+                    logger.info("🔥 Warming up connection...")
+                    session.head(url, timeout=15, allow_redirects=True)
+                    time.sleep(0.5)
+                except:
+                    pass
+            
             # Download with streaming
-            response = http.request(
-                'GET',
+            response = session.get(
                 url,
                 headers=headers,
-                preload_content=False,  # CRITICAL for chunked encoding
-                timeout=urllib3.Timeout(connect=45.0, read=900.0)
+                stream=True,  # CRITICAL: Enable streaming
+                timeout=(45, 900),
+                allow_redirects=True  # CRITICAL: Follow redirects
             )
             
-            if response.status not in [200, 206]:
-                raise Exception(f"HTTP {response.status}")
+            response.raise_for_status()
             
             # Get total size
             if not total_size:
-                content_length = response.headers.get('Content-Length')
+                content_length = response.headers.get('content-length')
                 if content_length:
                     total_size = int(content_length) + start_byte
                 else:
@@ -145,34 +144,32 @@ def download_file_sync_with_progress(url, file_path, total_size, update_func, me
             }
             
             with open(file_path, mode) as f:
-                while True:
-                    chunk = response.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    
-                    current_time = time.time()
-                    
-                    # Update progress every 3 seconds
-                    if current_time - last_update_time >= PROGRESS_UPDATE_INTERVAL:
-                        bytes_since_update = downloaded - last_update_bytes
-                        time_since_update = current_time - last_update_time
-                        current_speed = bytes_since_update / time_since_update if time_since_update > 0 else 0
+                # CRITICAL: Use iter_content with decode_unicode=False
+                for chunk in response.iter_content(chunk_size=CHUNK_SIZE, decode_unicode=False):
+                    if chunk:  # Filter out keep-alive new chunks
+                        f.write(chunk)
+                        downloaded += len(chunk)
                         
-                        progress_state['downloaded'] = downloaded
-                        progress_state['speed'] = current_speed
+                        current_time = time.time()
                         
-                        if update_func:
-                            update_func(progress_state)
-                        
-                        logger.info(f"📥 Downloaded: {format_size(downloaded)} - Speed: {format_size(current_speed)}/s")
-                        
-                        last_update_time = current_time
-                        last_update_bytes = downloaded
+                        # Update progress
+                        if current_time - last_update_time >= PROGRESS_UPDATE_INTERVAL:
+                            bytes_since_update = downloaded - last_update_bytes
+                            time_since_update = current_time - last_update_time
+                            current_speed = bytes_since_update / time_since_update if time_since_update > 0 else 0
+                            
+                            progress_state['downloaded'] = downloaded
+                            progress_state['speed'] = current_speed
+                            
+                            if update_func:
+                                update_func(progress_state)
+                            
+                            logger.info(f"📥 Downloaded: {format_size(downloaded)} - Speed: {format_size(current_speed)}/s")
+                            
+                            last_update_time = current_time
+                            last_update_bytes = downloaded
             
-            response.release_conn()
+            session.close()
             
             final_size = os.path.getsize(file_path)
             total_time = time.time() - start_time
@@ -188,6 +185,11 @@ def download_file_sync_with_progress(url, file_path, total_size, update_func, me
             
         except Exception as e:
             logger.warning(f"⚠️ Attempt {attempt} failed: {e.__class__.__name__}: {str(e)}")
+            
+            try:
+                session.close()
+            except:
+                pass
             
             if attempt < MAX_RETRIES:
                 wait_time = attempt * 2
@@ -373,4 +375,4 @@ def get_safe_filename(filename):
         name, ext = os.path.splitext(filename)
         filename = name[:200-len(ext)] + ext
     return filename
-            
+    
