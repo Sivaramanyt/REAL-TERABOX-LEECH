@@ -1,18 +1,22 @@
 import logging
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+
 from database import (
-    get_user_data, increment_leech_attempts, can_user_leech, 
+    get_user_data, increment_leech_attempts, can_user_leech,
     needs_verification, set_verification_token, verify_user, get_bot_stats,
-    users_collection  # Make sure this is imported for direct db access
+    users_collection
 )
+
 from verification import (
-    generate_verify_token, generate_monetized_verification_link, 
+    generate_verify_token, generate_monetized_verification_link,
     extract_token_from_start, test_shortlink_api, create_universal_shortlink
 )
-from auto_forward import forward_file_to_channel, send_auto_forward_notification, test_auto_forward
+
+from auto_forward import forward_file_to_channel, test_auto_forward
 from config import (
-    START_MESSAGE, VERIFICATION_MESSAGE, VERIFIED_MESSAGE, 
+    START_MESSAGE, VERIFICATION_MESSAGE, VERIFY_TOKEN_TIMEOUT,
     FREE_LEECH_LIMIT, VERIFY_TUTORIAL, BOT_USERNAME, OWNER_ID,
     AUTO_FORWARD_ENABLED, BACKUP_CHANNEL_ID
 )
@@ -22,44 +26,80 @@ logger = logging.getLogger(__name__)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
+    
+    # Check if user came from verification link
     if context.args:
         token = extract_token_from_start(context.args[0])
         if token:
             verified_user_id = verify_user(token)
             if verified_user_id:
-                await update.message.reply_text(VERIFIED_MESSAGE, parse_mode='Markdown')
+                # Calculate validity time automatically
+                validity_hours = VERIFY_TOKEN_TIMEOUT / 3600
+                
+                # Format validity time
+                if validity_hours >= 24:
+                    validity_str = f"{int(validity_hours / 24)} days"
+                elif validity_hours >= 1:
+                    validity_str = f"{int(validity_hours)} hours"
+                else:
+                    validity_str = f"{int(VERIFY_TOKEN_TIMEOUT / 60)} minutes"
+                
+                # Get user data to show expiry time
+                user_data = get_user_data(verified_user_id)
+                verify_expiry = user_data.get("verify_expiry")
+                
+                success_message = (
+                    "✅ **Verification Successful!**\n\n"
+                    f"🎉 You now have unlimited access for the next **{validity_str}**!\n\n"
+                    f"⏰ **Validity:** {validity_str}\n"
+                )
+                
+                if verify_expiry:
+                    expiry_time = verify_expiry.strftime('%Y-%m-%d %H:%M:%S')
+                    success_message += f"📅 **Expires:** {expiry_time}\n\n"
+                
+                success_message += "🚀 Start using the bot to leech files!"
+                
+                await update.message.reply_text(success_message, parse_mode='Markdown')
                 return
             else:
                 await update.message.reply_text(
-                    "❌ Verification failed. Please try again.", parse_mode='Markdown'
+                    "❌ Verification failed. Please try again.", 
+                    parse_mode='Markdown'
                 )
                 return
+    
+    # Normal start message
     user_data = get_user_data(user_id)
     if not user_data:
         await update.message.reply_text("❌ Database error. Please try again later.")
         return
+    
     used_attempts = user_data.get("leech_attempts", 0)
     is_verified = user_data.get("is_verified", False)
+    
     if is_verified:
         verification_status = "✅ **Status:** Verified (Unlimited access)"
     else:
         remaining = FREE_LEECH_LIMIT - used_attempts
         verification_status = f"⏳ **Status:** {remaining} attempts remaining"
+    
     message = START_MESSAGE.format(
         mention=user.mention_markdown(),
         used_attempts=used_attempts,
         verification_status=verification_status
     )
+    
     await update.message.reply_text(message, parse_mode='Markdown')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
 🤖 **Terabox Leech Bot Help**
 
-- 3 free leech attempts
-- After 3, click monetized shortlink to verify
-- Unlimited access after verification
-- All files auto-backed up to channel
+• 3 free leech attempts
+• After 3, click monetized shortlink to verify
+• Unlimited access after verification
+• All files auto-backed up to channel
 
 **Commands:**
 /start - Start
@@ -80,6 +120,7 @@ Bot always uses your latest shortlink service!
 async def leech_attempt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
+    
     if not can_user_leech(user_id):
         if needs_verification(user_id):
             await send_verification_message(update, context)
@@ -87,10 +128,12 @@ async def leech_attempt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Error checking your account. Please try /start")
             return
+    
     if increment_leech_attempts(user_id):
         user_data = get_user_data(user_id)
         used_attempts = user_data.get("leech_attempts", 0)
         is_verified = user_data.get("is_verified", False)
+        
         success_message = await update.message.reply_text(
             f"✅ Leech Attempt #{used_attempts}\n"
             "🚀 Processing your request...\n"
@@ -98,13 +141,10 @@ async def leech_attempt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📊 Status: Success (Simulated)\n"
             "📢 Auto-forwarding to backup channel..."
         )
+        
         if AUTO_FORWARD_ENABLED:
-            forward_success = await forward_file_to_channel(
-                context, user, success_message, 
-                original_link="https://terabox.com/s/simulated_link"
-            )
-            if forward_success:
-                await send_auto_forward_notification(update, context)
+            await forward_file_to_channel(context, user, success_message)
+        
         if not is_verified and used_attempts < FREE_LEECH_LIMIT:
             remaining = FREE_LEECH_LIMIT - used_attempts
             await update.message.reply_text(
@@ -119,8 +159,10 @@ async def leech_attempt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_verification_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     token = generate_verify_token()
+    
     if set_verification_token(user_id, token):
         verify_link = generate_monetized_verification_link(BOT_USERNAME, token)
+        
         if verify_link:
             message = (
                 "🔒 Verification Required!\n\n"
@@ -130,11 +172,13 @@ async def send_verification_message(update: Update, context: ContextTypes.DEFAUL
                 f"📺 Tutorial: {VERIFY_TUTORIAL}\n\n"
                 "Note: Verification click = money for this bot."
             )
+            
             keyboard = [
                 [InlineKeyboardButton("💰 Verify & Support", url=verify_link)],
                 [InlineKeyboardButton("📺 How to Verify?", url=VERIFY_TUTORIAL)]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await update.message.reply_text(message, reply_markup=reply_markup)
         else:
             await update.message.reply_text("❌ Error generating verification link. Check API config.")
@@ -149,36 +193,38 @@ async def verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_data = get_user_data(user_id)
+    
     if not user_data:
         await update.message.reply_text("❌ Error getting your stats.")
         return
+    
     used_attempts = user_data.get("leech_attempts", 0)
     is_verified = user_data.get("is_verified", False)
     join_date = user_data.get("joined_date", "Unknown")
+    
     user_stats = f"""
-👤 Your Stats
-
-Leech AttemptPts: {used_attempts}
-Verification Status: {'Verified' if is_verified else 'Not Verified'}
-Joined: {join_date.strftime('%Y-%m-%d') if hasattr(join_date, 'strftime') else join_date}
-Auto-Forward: {'Enabled' if AUTO_FORWARD_ENABLED else 'Disabled'}
-
+👤 **Your Stats**
+📊 Leech Attempts: {used_attempts}
+✅ Verification Status: {'Verified' if is_verified else 'Not Verified'}
+📅 Joined: {join_date.strftime('%Y-%m-%d') if hasattr(join_date, 'strftime') else join_date}
+📢 Auto-Forward: {'Enabled' if AUTO_FORWARD_ENABLED else 'Disabled'}
 {'🚀 Status: Unlimited Access' if is_verified else f'⏳ Remaining: {FREE_LEECH_LIMIT - used_attempts} free attempts'}
 """
+    
     if user_id == OWNER_ID:
         bot_stats = get_bot_stats()
         bot_stats_text = f"""
-Bot Stats (Admin)
-
-Total Users: {bot_stats['total_users']}
-Verified Users: {bot_stats['verified_users']}
-Total AttemptPts: {bot_stats['total_attempts']}
-BackuP Channel: {BACKUP_CHANNEL_ID if BACKUP_CHANNEL_ID else 'Not Set'}
-Universal Shortlinks: Enabled
-Monetization: Active
+**📊 Bot Stats (Admin)**
+👥 Total Users: {bot_stats['total_users']}
+✅ Verified Users: {bot_stats['verified_users']}
+📈 Total Attempts: {bot_stats['total_attempts']}
+📢 Backup Channel: {BACKUP_CHANNEL_ID if BACKUP_CHANNEL_ID else 'Not Set'}
+🔗 Universal Shortlinks: Enabled
+💰 Monetization: Active
 """
         user_stats += bot_stats_text
-    await update.message.reply_text(user_stats)
+    
+    await update.message.reply_text(user_stats, parse_mode='Markdown')
 
 async def test_forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -192,6 +238,7 @@ async def test_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id != OWNER_ID:
         await update.message.reply_text("❌ This command is only for admins.")
         return
+    
     await update.message.reply_text("🧪 Testing Universal Shortlink API...")
     if test_shortlink_api():
         await update.message.reply_text(
@@ -199,44 +246,41 @@ async def test_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Verification will work with any shortlink."
         )
     else:
-        await update.message.reply_text(
-            "❌ API Test Failed! Please check your API key and URL."
-        )
+        await update.message.reply_text("❌ API Test Failed! Please check your API key and URL.")
 
 async def debug_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != OWNER_ID:
         await update.message.reply_text("❌ Admin only.")
         return
+    
     await update.message.reply_text("🪛 Testing all shortlink formats...")
     link = create_universal_shortlink("https://google.com")
-    await update.message.reply_text(
-        f"Debug result: {link if link else 'No shortlink created.'}")
-
-# --- Add Reset Verify command here ---
+    await update.message.reply_text(f"Debug result: {link if link else 'No shortlink created.'}")
 
 async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != OWNER_ID:
         await update.message.reply_text("❌ Only the bot owner can use this command.")
         return
+    
     try:
         if context.args:
             target_id = int(context.args[0])
         else:
-            target_id = user_id  # Default to your own id
+            target_id = user_id
+        
         result = users_collection.update_one(
             {"user_id": target_id},
             {"$set": {"is_verified": False, "leech_attempts": 0}}
         )
+        
         if result.modified_count > 0:
             await update.message.reply_text(
                 f"✅ Verification RESET for user {target_id}. User will now see verification link again."
             )
         else:
-            await update.message.reply_text(
-                "ℹ️ No change. User may not exist or already unverified."
-            )
+            await update.message.reply_text("ℹ️ No change. User may not exist or already unverified.")
     except Exception as e:
         await update.message.reply_text(f"❌ Error resetting verification: {e}")
-                              
+    
