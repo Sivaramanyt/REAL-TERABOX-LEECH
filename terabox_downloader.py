@@ -1,233 +1,363 @@
 """
-Terabox Command Handlers
-WITH LIVE DOWNLOAD PROGRESS UPDATES
+Terabox File Downloader - WITH LIVE TELEGRAM PROGRESS
+Shows real-time download progress to users
 """
 
-import logging
 import os
-import re
+import asyncio
+import requests
+import logging
+import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
 from telegram import Update
 from telegram.ext import ContextTypes
-
-# Import your existing functions
-from database import can_user_leech, increment_leech_attempts, get_user_data, needs_verification
-from handlers import send_verification_message
-from auto_forward import forward_file_to_channel
-from config import FREE_LEECH_LIMIT, AUTO_FORWARD_ENABLED
-
-# Import Terabox functions
-from terabox_api import is_terabox_url, extract_terabox_data, format_size, TeraboxException
-from terabox_downloader import download_file, upload_to_telegram, cleanup_file, get_safe_filename, DOWNLOAD_DIR
+from telegram.error import BadRequest, RetryAfter
+from terabox_api import format_size
 
 logger = logging.getLogger(__name__)
 
-# Terabox URL pattern - ALL domains
-TERABOX_PATTERN = re.compile(
-    r'https?://(?:www\.)?(terabox|teraboxapp|1024tera|4funbox|teraboxshare|teraboxurl|1024terabox|terafileshare|teraboxlink|terasharelink)\.(com|app|fun)/(?:s/|wap/share/filelist\?surl=)[\w-]+',
-    re.IGNORECASE
-)
+# Configuration
+DOWNLOAD_DIR = "downloads"
+THUMBNAIL_DIR = "thumbnails"
+MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+CHUNK_SIZE = 4096  # 4KB chunks
+MAX_RETRIES = 3
+PROGRESS_UPDATE_INTERVAL = 3  # Update Telegram message every 3 seconds
 
-async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Video file extensions
+VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
+
+# Thread pool
+executor = ThreadPoolExecutor(max_workers=3)
+
+# Progress bar generator
+def create_progress_bar(percentage):
+    """Create a visual progress bar"""
+    filled = int(percentage / 10)
+    empty = 10 - filled
+    return '█' * filled + '░' * empty
+
+async def update_progress_message(message, downloaded, total_size, speed, start_time):
+    """Update Telegram message with download progress"""
+    try:
+        percentage = (downloaded / total_size * 100) if total_size > 0 else 0
+        elapsed = time.time() - start_time
+        remaining_bytes = total_size - downloaded
+        eta = remaining_bytes / speed if speed > 0 else 0
+        
+        progress_bar = create_progress_bar(percentage)
+        
+        progress_text = (
+            f"⬇️ **Downloading...**\n\n"
+            f"`{progress_bar}` {percentage:.1f}%\n\n"
+            f"📦 **Downloaded:** {format_size(downloaded)} / {format_size(total_size)}\n"
+            f"⚡ **Speed:** {format_size(speed)}/s\n"
+            f"⏱️ **Time Elapsed:** {int(elapsed)}s\n"
+            f"⏳ **ETA:** {int(eta)}s remaining"
+        )
+        
+        await message.edit_text(progress_text, parse_mode='Markdown')
+    except (BadRequest, RetryAfter) as e:
+        logger.debug(f"Progress update skipped: {e}")
+    except Exception as e:
+        logger.warning(f"Progress update error: {e}")
+
+def download_file_sync_with_progress(url, file_path, total_size, update_func, message_id):
     """
-    Main handler for Terabox links
-    WITH LIVE DOWNLOAD PROGRESS
+    Synchronous download with progress callback
     """
-    user_id = update.effective_user.id
-    user = update.effective_user
-    message_text = update.message.text
+    logger.info(f"⬇️ Starting download with live progress: {file_path}")
     
-    # Check if message contains Terabox URL
-    if not TERABOX_PATTERN.search(message_text):
-        return False
-    
-    # Extract Terabox URL
-    match = TERABOX_PATTERN.search(message_text)
-    terabox_url = match.group(0)
-    
-    logger.info(f"📦 Terabox link detected from user {user_id}: {terabox_url}")
-    
-    # CHECK VERIFICATION STATUS
-    if not can_user_leech(user_id):
-        if needs_verification(user_id):
-            await send_verification_message(update, context)
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            logger.info(f"🔄 Download attempt {attempt}/{MAX_RETRIES}")
+            
+            start_byte = 0
+            if os.path.exists(file_path) and attempt > 1:
+                start_byte = os.path.getsize(file_path)
+                logger.info(f"📍 Resuming from byte {start_byte}")
+            
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=10,
+                pool_maxsize=20,
+                max_retries=0
+            )
+            session.mount('http://', adapter)
+            session.mount('https://', adapter)
+            
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive'
+            })
+            
+            if attempt == 1:
+                try:
+                    logger.info("🔥 Warming up connection...")
+                    session.head(url, timeout=15)
+                    time.sleep(0.5)
+                except:
+                    pass
+            
+            headers = {}
+            if start_byte > 0:
+                headers['Range'] = f'bytes={start_byte}-'
+            
+            response = session.get(
+                url,
+                headers=headers,
+                stream=True,
+                timeout=(45, 900)
+            )
+            response.raise_for_status()
+            
+            if not total_size:
+                total_size = int(response.headers.get('content-length', 0)) + start_byte
+            
+            mode = 'ab' if start_byte > 0 else 'wb'
+            downloaded = start_byte
+            start_time = time.time()
+            last_update_time = start_time
+            last_update_bytes = downloaded
+            
+            progress_state = {
+                'downloaded': downloaded,
+                'total_size': total_size,
+                'speed': 0,
+                'start_time': start_time
+            }
+            
+            with open(file_path, mode, buffering=8192) as f:
+                for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        
+                        current_time = time.time()
+                        
+                        if current_time - last_update_time >= PROGRESS_UPDATE_INTERVAL:
+                            bytes_since_update = downloaded - last_update_bytes
+                            time_since_update = current_time - last_update_time
+                            current_speed = bytes_since_update / time_since_update if time_since_update > 0 else 0
+                            
+                            progress_state['downloaded'] = downloaded
+                            progress_state['speed'] = current_speed
+                            
+                            if update_func:
+                                update_func(progress_state)
+                            
+                            last_update_time = current_time
+                            last_update_bytes = downloaded
+            
+            session.close()
+            
+            final_size = os.path.getsize(file_path)
+            total_time = time.time() - start_time
+            avg_speed = (final_size - start_byte) / total_time if total_time > 0 else 0
+            
+            logger.info(
+                f"✅ Download completed: {format_size(final_size)} | "
+                f"Time: {int(total_time)}s | "
+                f"Speed: {format_size(avg_speed)}/s"
+            )
+            
             return True
-        else:
-            await update.message.reply_text("❌ Error checking your account. Please try /start")
-            return True
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Attempt {attempt} failed: {e.__class__.__name__}")
+            
+            try:
+                session.close()
+            except:
+                pass
+            
+            if attempt < MAX_RETRIES:
+                wait_time = attempt * 2
+                logger.info(f"⏳ Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"❌ All attempts failed")
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                raise Exception(f"Download failed: {e}")
+
+async def download_file(url, file_path, total_size=0, status_message=None):
+    """
+    Async wrapper with live Telegram progress updates
+    """
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     
-    # User can leech - proceed with download
-    status_msg = await update.message.reply_text(
-        "🔄 **Processing Terabox link...**\n"
-        "⏳ Please wait...",
-        parse_mode='Markdown'
+    progress_data = {'downloaded': 0, 'total_size': total_size, 'speed': 0, 'start_time': time.time()}
+    last_message_update = time.time()
+    
+    def progress_callback(state):
+        nonlocal progress_data, last_message_update
+        progress_data.update(state)
+        
+        current_time = time.time()
+        if status_message and current_time - last_message_update >= PROGRESS_UPDATE_INTERVAL:
+            asyncio.create_task(
+                update_progress_message(
+                    status_message,
+                    state['downloaded'],
+                    state['total_size'],
+                    state['speed'],
+                    state['start_time']
+                )
+            )
+            last_message_update = current_time
+    
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        executor,
+        download_file_sync_with_progress,
+        url,
+        file_path,
+        total_size,
+        progress_callback,
+        None
     )
     
+    return True
+
+async def generate_video_thumbnail(video_path, thumbnail_path=None):
+    """Generate thumbnail from video"""
     try:
-        # Extract file information from Terabox
-        await status_msg.edit_text("🔍 **Fetching file information...**", parse_mode='Markdown')
-        file_data = extract_terabox_data(terabox_url)
+        os.makedirs(THUMBNAIL_DIR, exist_ok=True)
         
-        # Increment leech attempts
-        increment_leech_attempts(user_id)
-        user_data = get_user_data(user_id)
-        used_attempts = user_data.get("leech_attempts", 0)
-        is_verified = user_data.get("is_verified", False)
+        if not thumbnail_path:
+            thumbnail_path = os.path.join(THUMBNAIL_DIR, f"{os.path.basename(video_path)}_thumb.jpg")
         
-        # Display file information
-        if file_data["type"] == "file":
-            # Single file
-            file_info = file_data["files"][0]
-            
-            # Show file info
-            info_text = (
-                f"📁 **File Information**\n\n"
-                f"📝 Name: `{file_info['name']}`\n"
-                f"📦 Size: {file_info['size_str']}\n"
-                f"📊 Attempt: #{used_attempts}\n\n"
-                f"⏬ **Preparing download...**"
-            )
-            await status_msg.edit_text(info_text, parse_mode='Markdown')
-            
-            # Prepare file path
-            safe_filename = get_safe_filename(file_info['name'])
-            file_path = os.path.join(DOWNLOAD_DIR, safe_filename)
-            
-            # Download file WITH LIVE PROGRESS
-            await download_file(
-                url=file_info['url'],
-                file_path=file_path,
-                total_size=file_info['size'],
-                status_message=status_msg  # ✅ Pass status message for live updates
-            )
-            
-            # Upload to Telegram
-            await status_msg.edit_text("⬆️ **Uploading to Telegram...**", parse_mode='Markdown')
-            
-            caption = (
-                f"📄 {file_info['name']}\n"
-                f"📦 {file_info['size_str']}\n"
-                f"🤖 Terabox Leech Bot"
-            )
-            
-            # Upload and get sent message
-            sent_message = await upload_to_telegram(update, context, file_path, caption, file_info)
-            
-            # Auto-forward if enabled
-            if AUTO_FORWARD_ENABLED:
-                try:
-                    await forward_file_to_channel(context, user, sent_message)
-                except Exception as e:
-                    logger.error(f"Auto-forward error: {e}")
-            
-            # Cleanup
-            cleanup_file(file_path)
-            await status_msg.delete()
-            
-            # Show remaining attempts
-            if not is_verified and used_attempts < FREE_LEECH_LIMIT:
-                remaining = FREE_LEECH_LIMIT - used_attempts
-                await update.message.reply_text(
-                    f"✅ **File uploaded successfully!**\n\n"
-                    f"⏳ Remaining attempts: {remaining}/{FREE_LEECH_LIMIT}",
-                    parse_mode='Markdown'
-                )
-            elif used_attempts >= FREE_LEECH_LIMIT and not is_verified:
-                await update.message.reply_text("✅ **File uploaded successfully!**", parse_mode='Markdown')
-                await send_verification_message(update, context)
-            else:
-                await update.message.reply_text("✅ **File uploaded successfully!**", parse_mode='Markdown')
+        command = [
+            'ffmpeg',
+            '-i', video_path,
+            '-ss', '00:00:01.000',
+            '-vframes', '1',
+            '-vf', 'scale=320:320:force_original_aspect_ratio=decrease',
+            '-y',
+            thumbnail_path
+        ]
         
-        elif file_data["type"] == "folder":
-            # Folder with multiple files
-            total_files = len(file_data["files"])
-            
-            await status_msg.edit_text(
-                f"📁 **Folder Detected**\n\n"
-                f"📝 Name: `{file_data['title']}`\n"
-                f"📦 Total Size: {format_size(file_data['total_size'])}\n"
-                f"📄 Files: {total_files}\n\n"
-                f"⏬ **Processing files...**",
-                parse_mode='Markdown'
-            )
-            
-            # Process each file
-            for idx, file_info in enumerate(file_data["files"], 1):
-                try:
-                    # Update status for this file
-                    await status_msg.edit_text(
-                        f"📁 **File [{idx}/{total_files}]**\n\n"
-                        f"📝 {file_info['name']}\n"
-                        f"📦 {file_info['size_str']}\n\n"
-                        f"⏬ **Preparing...**",
-                        parse_mode='Markdown'
-                    )
-                    
-                    # Prepare file path
-                    safe_filename = get_safe_filename(file_info['name'])
-                    file_path = os.path.join(DOWNLOAD_DIR, safe_filename)
-                    
-                    # Download WITH LIVE PROGRESS
-                    await download_file(
-                        url=file_info['url'],
-                        file_path=file_path,
-                        total_size=file_info['size'],
-                        status_message=status_msg  # ✅ Live progress for each file
-                    )
-                    
-                    # Upload
-                    await status_msg.edit_text(
-                        f"⬆️ **Uploading [{idx}/{total_files}]**\n\n"
-                        f"📝 {file_info['name']}",
-                        parse_mode='Markdown'
-                    )
-                    
-                    caption = f"📄 {file_info['name']} [{idx}/{total_files}]\n📦 {file_info['size_str']}"
-                    sent_message = await upload_to_telegram(update, context, file_path, caption, file_info)
-                    
-                    # Auto-forward each file
-                    if AUTO_FORWARD_ENABLED:
-                        try:
-                            await forward_file_to_channel(context, user, sent_message)
-                        except Exception as e:
-                            logger.error(f"Auto-forward error for file {idx}: {e}")
-                    
-                    # Cleanup
-                    cleanup_file(file_path)
-                    
-                except Exception as e:
-                    await update.message.reply_text(
-                        f"❌ Failed: {file_info['name']}\nError: {str(e)}"
-                    )
-            
-            await status_msg.edit_text(
-                f"✅ **Folder leech completed!**\n"
-                f"📁 {total_files} files uploaded",
-                parse_mode='Markdown'
-            )
-            
-            # Show remaining attempts
-            if not is_verified and used_attempts < FREE_LEECH_LIMIT:
-                remaining = FREE_LEECH_LIMIT - used_attempts
-                await update.message.reply_text(
-                    f"⏳ Remaining attempts: {remaining}/{FREE_LEECH_LIMIT}",
-                    parse_mode='Markdown'
-                )
-            elif used_attempts >= FREE_LEECH_LIMIT and not is_verified:
-                await send_verification_message(update, context)
-        
-        return True
-        
-    except TeraboxException as e:
-        await status_msg.edit_text(
-            f"❌ **Terabox Error**\n\n{str(e)}",
-            parse_mode='Markdown'
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
-        return True
+        
+        await process.communicate()
+        
+        if process.returncode == 0 and os.path.exists(thumbnail_path):
+            logger.info(f"✅ Thumbnail generated")
+            return thumbnail_path
+        return None
+            
     except Exception as e:
-        logger.error(f"❌ Terabox handler error: {e}")
-        await status_msg.edit_text(
-            f"❌ **Error occurred**\n\n{str(e)}",
-            parse_mode='Markdown'
+        logger.error(f"❌ Thumbnail error: {e}")
+        return None
+
+async def get_video_metadata(video_path):
+    """Get video metadata"""
+    try:
+        command = [
+            'ffprobe',
+            '-v', 'quiet',
+            '-print_format', 'json',
+            '-show_streams',
+            '-show_format',
+            video_path
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
-        return True
+        
+        stdout, _ = await process.communicate()
+        
+        if process.returncode == 0:
+            import json
+            data = json.loads(stdout.decode())
+            
+            for stream in data.get('streams', []):
+                if stream.get('codec_type') == 'video':
+                    return {
+                        'width': int(stream.get('width', 0)),
+                        'height': int(stream.get('height', 0)),
+                        'duration': int(float(data.get('format', {}).get('duration', 0)))
+                    }
+        return None
+    except:
+        return None
+
+async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE, 
+                             file_path, caption, file_info=None):
+    """Upload file to Telegram"""
+    try:
+        if not os.path.exists(file_path):
+            raise Exception("File not found")
+        
+        file_size = os.path.getsize(file_path)
+        logger.info(f"⬆️ Uploading: {format_size(file_size)}")
+        
+        if file_size > MAX_FILE_SIZE:
+            raise Exception(f"File too large: {format_size(file_size)}")
+        
+        is_video = any(file_path.lower().endswith(ext) for ext in VIDEO_EXTENSIONS)
+        
+        if is_video:
+            thumbnail_path = await generate_video_thumbnail(file_path)
+            metadata = await get_video_metadata(file_path)
+            
+            with open(file_path, 'rb') as video_file:
+                kwargs = {
+                    'video': video_file,
+                    'caption': caption,
+                    'supports_streaming': True
+                }
+                
+                if thumbnail_path:
+                    kwargs['thumbnail'] = open(thumbnail_path, 'rb')
+                
+                if metadata:
+                    kwargs.update(metadata)
+                
+                sent_message = await update.message.reply_video(**kwargs)
+                
+                if thumbnail_path and 'thumbnail' in kwargs:
+                    kwargs['thumbnail'].close()
+                    os.remove(thumbnail_path)
+        else:
+            sent_message = await update.message.reply_document(
+                document=open(file_path, 'rb'),
+                caption=caption
+            )
+        
+        logger.info("✅ Upload completed")
+        return sent_message
+        
+    except Exception as e:
+        logger.error(f"❌ Upload error: {e}")
+        raise
+
+def cleanup_file(file_path):
+    """Remove file"""
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"🗑️ Cleaned up: {file_path}")
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
+
+def get_safe_filename(filename):
+    """Safe filename"""
+    import re
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+    if len(filename) > 200:
+        name, ext = os.path.splitext(filename)
+        filename = name[:200-len(ext)] + ext
+    return filename
         
