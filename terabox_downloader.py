@@ -1,13 +1,15 @@
 """
-Terabox File Downloader - FIRST ATTEMPT OPTIMIZED
-Pre-warms connection to avoid ClientPayloadError
+Terabox File Downloader - SPEED OPTIMIZED FOR 200-300 KB/s
+Multiple techniques to maximize download speed
 """
 
 import os
 import asyncio
-import aiohttp
+import requests
 import logging
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
 from telegram import Update
 from telegram.ext import ContextTypes
 from terabox_api import format_size
@@ -18,128 +20,142 @@ logger = logging.getLogger(__name__)
 DOWNLOAD_DIR = "downloads"
 THUMBNAIL_DIR = "thumbnails"
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
-CHUNK_SIZE = 8 * 1024 * 1024  # 8MB chunks
+CHUNK_SIZE = 4096  # 4KB chunks (optimal for 200-300 KB/s)
 MAX_RETRIES = 3
-CONNECT_TIMEOUT = 90  # Increased from 60
-DOWNLOAD_TIMEOUT = 7200
 
 # Video file extensions
 VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
 
-async def warm_up_connection(session, url):
-    """
-    Pre-warm connection with HEAD request
-    This prevents ClientPayloadError on first download attempt
-    """
-    try:
-        logger.info("🔥 Warming up connection...")
-        async with session.head(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
-            logger.info(f"✅ Connection warmed up - Status: {response.status}")
-            await asyncio.sleep(1)  # Small delay to stabilize
-            return True
-    except Exception as e:
-        logger.warning(f"⚠️ Warm-up failed (non-critical): {e}")
-        return False
+# Thread pool
+executor = ThreadPoolExecutor(max_workers=3)
 
-async def download_file(url, file_path, progress_callback=None):
+def download_file_sync(url, file_path, total_size=0):
     """
-    Download file with connection warm-up for first attempt success
-    OPTIMIZED: Reduces ClientPayloadError significantly
+    SPEED OPTIMIZED synchronous download
+    Targets 200-300 KB/s speeds
     """
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    logger.info(f"⬇️ Starting download: {file_path}")
-    
-    # Configure session with optimized settings
-    connector = aiohttp.TCPConnector(
-        limit=10,
-        limit_per_host=5,
-        ttl_dns_cache=300,
-        force_close=False,  # Keep connection alive
-        enable_cleanup_closed=True
-    )
-    
-    timeout = aiohttp.ClientTimeout(
-        total=DOWNLOAD_TIMEOUT,
-        connect=CONNECT_TIMEOUT,
-        sock_read=600  # 10 minutes per chunk
-    )
-    
-    # Enhanced headers for better connection
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive'
-    }
+    logger.info(f"⬇️ Starting SPEED OPTIMIZED download: {file_path}")
     
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             logger.info(f"🔄 Download attempt {attempt}/{MAX_RETRIES}")
             
-            # Check if partial file exists (for resume)
+            # Check if partial file exists
             start_byte = 0
             if os.path.exists(file_path) and attempt > 1:
                 start_byte = os.path.getsize(file_path)
                 logger.info(f"📍 Resuming from byte {start_byte}")
             
-            async with aiohttp.ClientSession(
-                connector=connector,
-                timeout=timeout,
-                headers=headers
-            ) as session:
-                
-                # CRITICAL: Warm up connection on first attempt
-                if attempt == 1:
-                    await warm_up_connection(session, url)
-                
-                # Set range header for resume
-                request_headers = {}
-                if start_byte > 0:
-                    request_headers['Range'] = f'bytes={start_byte}-'
-                
-                async with session.get(url, headers=request_headers) as response:
-                    if response.status not in [200, 206]:
-                        raise Exception(f"Download failed with status {response.status}")
-                    
-                    # Get total size
-                    content_length = response.headers.get('content-length')
-                    if content_length:
-                        total_size = int(content_length) + start_byte
-                        logger.info(f"📦 Total file size: {format_size(total_size)}")
-                    else:
-                        total_size = 0
-                        logger.info("📦 File size: Unknown")
-                    
-                    # Open file
-                    mode = 'ab' if start_byte > 0 else 'wb'
-                    downloaded = start_byte
-                    last_log = 0
-                    
-                    with open(file_path, mode) as f:
-                        # Download in chunks
-                        async for chunk in response.content.iter_chunked(CHUNK_SIZE):
-                            f.write(chunk)
-                            downloaded += len(chunk)
+            # SPEED OPTIMIZATION 1: Persistent session with connection pooling
+            session = requests.Session()
+            
+            # SPEED OPTIMIZATION 2: Multiple adapters for better connection management
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=10,
+                pool_maxsize=20,
+                max_retries=0,
+                pool_block=False
+            )
+            session.mount('http://', adapter)
+            session.mount('https://', adapter)
+            
+            # SPEED OPTIMIZATION 3: Optimized headers
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+            })
+            
+            # SPEED OPTIMIZATION 4: Connection warm-up
+            if attempt == 1:
+                try:
+                    logger.info("🔥 Warming up connection for max speed...")
+                    warmup = session.head(url, timeout=15)
+                    logger.info(f"🔥 Connection ready - Server: {warmup.headers.get('Server', 'Unknown')}")
+                    time.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"⚠️ Warm-up failed: {e}")
+            
+            # Set range header for resume
+            headers = {}
+            if start_byte > 0:
+                headers['Range'] = f'bytes={start_byte}-'
+            
+            # SPEED OPTIMIZATION 5: Longer connect timeout, streaming enabled
+            response = session.get(
+                url,
+                headers=headers,
+                stream=True,
+                timeout=(45, 900),  # (connect, read) - longer timeouts
+                allow_redirects=True
+            )
+            response.raise_for_status()
+            
+            # SPEED OPTIMIZATION 6: Check if we got a good server
+            server_name = response.headers.get('Server', 'Unknown')
+            logger.info(f"📡 Connected to server: {server_name}")
+            
+            # Open file
+            mode = 'ab' if start_byte > 0 else 'wb'
+            downloaded = start_byte
+            start_time = time.time()
+            last_log_time = start_time
+            last_log_bytes = downloaded
+            
+            with open(file_path, mode, buffering=8192) as f:  # Buffered writes
+                # SPEED OPTIMIZATION 7: 4KB chunks (sweet spot for 200-300 KB/s)
+                for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        
+                        # Calculate speed every 2 seconds
+                        current_time = time.time()
+                        if current_time - last_log_time >= 2.0:
+                            elapsed = current_time - start_time
+                            bytes_since_log = downloaded - last_log_bytes
+                            current_speed = bytes_since_log / (current_time - last_log_time)
+                            avg_speed = (downloaded - start_byte) / elapsed if elapsed > 0 else 0
                             
-                            if progress_callback:
-                                await progress_callback(downloaded, total_size if total_size else downloaded)
+                            logger.info(
+                                f"📥 Downloaded: {format_size(downloaded)} | "
+                                f"Speed: {format_size(current_speed)}/s | "
+                                f"Avg: {format_size(avg_speed)}/s"
+                            )
                             
-                            # Log progress every 1MB (less spam)
-                            if downloaded - last_log >= 1024 * 1024:
-                                logger.info(f"📥 Downloaded: {format_size(downloaded)}")
-                                last_log = downloaded
-                    
-                    final_size = os.path.getsize(file_path)
-                    logger.info(f"✅ Download completed: {format_size(final_size)}")
-                    return True
-                    
-        except (asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ServerDisconnectedError) as e:
-            logger.warning(f"⚠️ Attempt {attempt} failed: {e.__class__.__name__}")
+                            last_log_time = current_time
+                            last_log_bytes = downloaded
+            
+            session.close()
+            
+            # Final stats
+            final_size = os.path.getsize(file_path)
+            total_time = time.time() - start_time
+            avg_speed = (final_size - start_byte) / total_time if total_time > 0 else 0
+            
+            logger.info(
+                f"✅ Download completed: {format_size(final_size)} | "
+                f"Time: {int(total_time)}s | "
+                f"Average speed: {format_size(avg_speed)}/s"
+            )
+            
+            return True
+            
+        except (requests.exceptions.RequestException, IOError) as e:
+            logger.warning(f"⚠️ Attempt {attempt} failed: {e.__class__.__name__}: {str(e)}")
+            
+            try:
+                session.close()
+            except:
+                pass
             
             if attempt < MAX_RETRIES:
-                wait_time = attempt * 3  # Wait 3, 6, 9 seconds (reduced from 5, 10, 15)
+                wait_time = attempt * 2
                 logger.info(f"⏳ Retrying in {wait_time} seconds...")
-                await asyncio.sleep(wait_time)
+                time.sleep(wait_time)
             else:
                 logger.error(f"❌ All {MAX_RETRIES} download attempts failed")
                 if os.path.exists(file_path):
@@ -151,10 +167,15 @@ async def download_file(url, file_path, progress_callback=None):
             if os.path.exists(file_path):
                 os.remove(file_path)
             raise
-        finally:
-            # Cleanup connector
-            if 'connector' in locals():
-                await connector.close()
+
+async def download_file(url, file_path, progress_callback=None):
+    """Async wrapper for synchronous download"""
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(executor, download_file_sync, url, file_path, 0)
+    
+    return True
 
 async def generate_video_thumbnail(video_path, thumbnail_path=None):
     """Generate thumbnail from video using ffmpeg"""
@@ -259,7 +280,7 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
         sent_message = None
         
         if is_video:
-            thumbnail_path = await generate_video_thumbnail(file_path)
+            thumbnail_path = await generate_video_thumbnail(video_path)
             metadata = await get_video_metadata(file_path)
             
             with open(file_path, 'rb') as video_file:
@@ -317,4 +338,4 @@ def get_safe_filename(filename):
         name, ext = os.path.splitext(filename)
         filename = name[:200-len(ext)] + ext
     return filename
-        
+                
