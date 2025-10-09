@@ -2,6 +2,7 @@
 Terabox Command Handlers
 Integrates with existing verification system
 Forwards the ACTUAL VIDEO FILE to backup channel
+UPDATED: Supports ALL Terabox domains
 """
 
 import logging
@@ -22,9 +23,9 @@ from terabox_downloader import download_file, upload_to_telegram, cleanup_file, 
 
 logger = logging.getLogger(__name__)
 
-# Terabox URL pattern
+# Terabox URL pattern - UPDATED to support ALL domains
 TERABOX_PATTERN = re.compile(
-    r'https?://(?:www\.)?(terabox|teraboxapp|1024tera|4funbox|teraboxshare)\.(com|app|fun)/(?:s/|wap/share/filelist\?surl=)[\w-]+',
+    r'https?://(?:www\.)?(terabox|teraboxapp|1024tera|4funbox|teraboxshare|teraboxurl|1024terabox|terafileshare|teraboxlink|terasharelink)\.(com|app|fun)/(?:s/|wap/share/filelist\?surl=)[\w-]+',
     re.IGNORECASE
 )
 
@@ -217,4 +218,4 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode='Markdown'
         )
         return True
-            
+        
