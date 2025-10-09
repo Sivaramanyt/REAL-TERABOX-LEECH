@@ -1,16 +1,16 @@
 """
-Terabox API Integration - FIXED
+Terabox API Integration - WORKING VERSION
+Based on processor-1.py
 """
 
 import requests
 import logging
 from urllib.parse import quote
-import re
 
 logger = logging.getLogger(__name__)
 
 TERABOX_API_URL = "https://wdzone-terabox-api.vercel.app/api"
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0"
 
 class TeraboxException(Exception):
     pass
@@ -20,80 +20,66 @@ def is_terabox_url(url):
     return any(domain in url.lower() for domain in terabox_domains)
 
 def extract_terabox_data(url):
+    """
+    Extract file info using wdzone-terabox-api
+    API returns: {"✅ Status": "Success", "📜 Extracted Info": [{...}]}
+    """
     try:
-        logger.info(f"🔍 Extracting Terabox data from: {url}")
+        logger.info(f"🔍 Processing URL: {url}")
         
         api_url = f"{TERABOX_API_URL}?url={quote(url)}"
-        response = requests.get(api_url, headers={"User-Agent": USER_AGENT}, timeout=30)
-        
-        logger.info(f"📊 API Response Status: {response.status_code}")
+        response = requests.get(api_url, headers={'User-Agent': USER_AGENT}, timeout=30)
         
         if response.status_code != 200:
-            raise TeraboxException(f"API returned status code: {response.status_code}")
+            raise TeraboxException(f"API request failed: {response.status_code}")
         
-        data = response.json()
-        logger.info(f"📄 API Response Keys: {list(data.keys())}")
+        req = response.json()
+        logger.info(f"📄 API response keys: {list(req.keys())}")
         
-        for key in data.keys():
-            if "Error" in key:
-                raise TeraboxException(data[key])
+        # Extract the array of file info
+        extracted_info = None
         
-        has_status = any("Status" in key for key in data.keys())
-        if not has_status:
+        if "✅ Status" in req and req["✅ Status"] == "Success":
+            extracted_info = req.get("📜 Extracted Info", [])
+        elif "Status" in req and req["Status"] == "Success":
+            extracted_info = req.get("Extracted Info", [])
+        else:
+            if "❌ Status" in req:
+                error_msg = req.get("📜 Message", "Unknown error")
+                raise TeraboxException(f"API Error: {error_msg}")
             raise TeraboxException("Invalid API response format")
         
-        result = {"type": None, "title": None, "files": [], "total_size": 0}
+        if not extracted_info or len(extracted_info) == 0:
+            raise TeraboxException("No files found in response")
         
-        extracted_info_key = None
-        for key in data.keys():
-            if "Extracted Info" in key:
-                extracted_info_key = key
-                break
+        # Get first file from array
+        data = extracted_info[0]
+        logger.info(f"📄 File data keys: {list(data.keys())}")
         
-        if not extracted_info_key:
-            raise TeraboxException("No extracted info found")
-        
-        extracted_info = data[extracted_info_key]
-        logger.info(f"📄 Extracted Info: {extracted_info[:200]}...")
-        
-        # USE REGEX to extract parts (handles URLs with query parameters)
-        filename = "Terabox_File"
-        filesize_str = "Unknown"
-        download_url = None
-        
-        # Extract Title
-        title_match = re.search(r'Title:\s*([^,]+?)(?:,\s*Size:|$)', extracted_info)
-        if title_match:
-            filename = title_match.group(1).strip()
-            logger.info(f"📝 Filename: {filename}")
-        
-        # Extract Size
-        size_match = re.search(r'Size:\s*([^,]+?)(?:,\s*Direct Download Link:|$)', extracted_info)
-        if size_match:
-            filesize_str = size_match.group(1).strip()
-            logger.info(f"📦 Size: {filesize_str}")
-        
-        # Extract Direct Download Link (handles URLs with & and other special chars)
-        link_match = re.search(r'Direct Download Link:\s*(https?://[^\s,]+?)(?:,\s*Thumbnails:|$)', extracted_info)
-        if link_match:
-            download_url = link_match.group(1).strip()
-            logger.info(f"🔗 Download URL: {download_url[:100]}...")
+        # Extract file details
+        filename = data.get("📂 Title") or data.get("Title", "Terabox_File")
+        size_str = data.get("📏 Size") or data.get("Size", "0 B")
+        download_url = data.get("🔽 Direct Download Link") or data.get("Direct Download Link", "")
         
         if not download_url:
-            logger.error(f"❌ Could not extract download link")
-            raise TeraboxException("Could not find download link")
+            raise TeraboxException("No download URL found in file data")
         
-        result["type"] = "file"
-        result["title"] = filename
-        result["files"].append({
-            "name": filename,
-            "url": download_url,
-            "size": parse_size(filesize_str),
-            "size_str": filesize_str
-        })
-        result["total_size"] = parse_size(filesize_str)
+        # Parse size
+        file_size = parse_size(size_str)
         
-        logger.info(f"✅ Extracted: {filename} ({filesize_str})")
+        result = {
+            "type": "file",
+            "title": filename,
+            "files": [{
+                "name": filename,
+                "url": download_url,
+                "size": file_size,
+                "size_str": size_str
+            }],
+            "total_size": file_size
+        }
+        
+        logger.info(f"✅ Extracted: {filename} ({size_str}) - {download_url[:60]}...")
         return result
         
     except requests.exceptions.Timeout:
@@ -104,27 +90,28 @@ def extract_terabox_data(url):
         logger.error(f"❌ Error: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        raise TeraboxException(f"Error: {str(e)}")
+        raise TeraboxException(f"Unexpected error: {str(e)}")
 
 def parse_size(size_str):
+    """Convert size string to bytes"""
     try:
-        if isinstance(size_str, int):
-            return size_str
-        size_str = str(size_str).upper().strip()
-        if not size_str or size_str == "UNKNOWN":
-            return 0
-        import re
-        match = re.match(r'([\d.]+)\s*([KMGT]?B)?', size_str)
-        if not match:
-            return 0
-        number = float(match.group(1))
-        unit = match.group(2) if match.group(2) else 'B'
-        units = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}
-        return int(number * units.get(unit, 1))
+        size_str = str(size_str).replace(" ", "").upper()
+        
+        if "TB" in size_str:
+            return int(float(size_str.replace("TB", "")) * 1024 * 1024 * 1024 * 1024)
+        elif "GB" in size_str:
+            return int(float(size_str.replace("GB", "")) * 1024 * 1024 * 1024)
+        elif "MB" in size_str:
+            return int(float(size_str.replace("MB", "")) * 1024 * 1024)
+        elif "KB" in size_str:
+            return int(float(size_str.replace("KB", "")) * 1024)
+        else:
+            return int(float(size_str.replace("B", "")))
     except:
         return 0
 
 def format_size(size_bytes):
+    """Convert bytes to human-readable format"""
     try:
         size_bytes = int(size_bytes)
         if size_bytes == 0:
@@ -136,4 +123,4 @@ def format_size(size_bytes):
         return f"{size_bytes:.2f} PB"
     except:
         return "Unknown"
-        
+            
