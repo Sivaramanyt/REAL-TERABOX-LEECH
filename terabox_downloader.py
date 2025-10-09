@@ -65,6 +65,7 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
                              file_path, caption, file_info=None):
     """
     Upload file to Telegram with appropriate type detection
+    RETURNS the sent message object for forwarding
     """
     try:
         if not os.path.exists(file_path):
@@ -80,21 +81,23 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
         # Determine if it's a video
         is_video = any(file_path.lower().endswith(ext) for ext in VIDEO_EXTENSIONS)
         
-        # Upload based on type
+        # Upload based on type and return the sent message
+        sent_message = None
+        
         if is_video:
-            await update.message.reply_video(
+            sent_message = await update.message.reply_video(
                 video=open(file_path, 'rb'),
                 caption=caption,
                 supports_streaming=True
             )
         else:
-            await update.message.reply_document(
+            sent_message = await update.message.reply_document(
                 document=open(file_path, 'rb'),
                 caption=caption
             )
         
         logger.info("✅ Upload completed successfully")
-        return True
+        return sent_message  # Return the message object, not True
         
     except Exception as e:
         logger.error(f"❌ Upload error: {e}")
@@ -119,3 +122,4 @@ def get_safe_filename(filename):
         name, ext = os.path.splitext(filename)
         filename = name[:200-len(ext)] + ext
     return filename
+                
