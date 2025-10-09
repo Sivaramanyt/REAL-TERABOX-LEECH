@@ -2,7 +2,7 @@
 Terabox Command Handlers
 Integrates with existing verification system
 Forwards the ACTUAL VIDEO FILE to backup channel
-UPDATED: Supports ALL Terabox domains
+UPDATED: Removed backup notification message
 """
 
 import logging
@@ -14,7 +14,7 @@ from telegram.ext import ContextTypes
 # Import your existing functions
 from database import can_user_leech, increment_leech_attempts, get_user_data, needs_verification
 from handlers import send_verification_message
-from auto_forward import forward_file_to_channel, send_auto_forward_notification
+from auto_forward import forward_file_to_channel
 from config import FREE_LEECH_LIMIT, AUTO_FORWARD_ENABLED
 
 # Import new Terabox functions
@@ -108,11 +108,11 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             # IMPORTANT: Get the sent message object
             sent_message = await upload_to_telegram(update, context, file_path, caption, file_info)
             
-            # Auto-forward if enabled - Forward the UPLOADED FILE, not user's message
+            # Auto-forward if enabled - Forward the UPLOADED FILE (NO NOTIFICATION MESSAGE)
             if AUTO_FORWARD_ENABLED:
                 try:
                     await forward_file_to_channel(context, user, sent_message)
-                    await send_auto_forward_notification(update, context)
+                    # Removed: await send_auto_forward_notification(update, context)
                 except Exception as e:
                     logger.error(f"Auto-forward error: {e}")
             
@@ -172,10 +172,11 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                     caption = f"📄 {file_info['name']} [{idx}/{total_files}]\n📦 {file_info['size_str']}"
                     sent_message = await upload_to_telegram(update, context, file_path, caption, file_info)
                     
-                    # Auto-forward each file - Forward the UPLOADED FILE
+                    # Auto-forward each file (NO NOTIFICATION MESSAGE)
                     if AUTO_FORWARD_ENABLED:
                         try:
                             await forward_file_to_channel(context, user, sent_message)
+                            # Removed: await send_auto_forward_notification(update, context)
                         except Exception as e:
                             logger.error(f"Auto-forward error for file {idx}: {e}")
                     
