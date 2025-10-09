@@ -1,6 +1,7 @@
 """
 Terabox Command Handlers
 Integrates with existing verification system
+Forwards the ACTUAL VIDEO FILE to backup channel
 """
 
 import logging
@@ -31,6 +32,7 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     """
     Main handler for Terabox links
     Integrates with your existing verification system
+    Forwards the UPLOADED VIDEO FILE, not the user's message
     """
     user_id = update.effective_user.id
     user = update.effective_user
@@ -93,7 +95,7 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             await download_file(file_info['url'], file_path)
             
-            # Upload to Telegram
+            # Upload to Telegram and get the sent message
             await status_msg.edit_text("⬆️ **Uploading to Telegram...**", parse_mode='Markdown')
             
             caption = (
@@ -102,12 +104,13 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"🤖 Terabox Leech Bot"
             )
             
-            await upload_to_telegram(update, context, file_path, caption, file_info)
+            # IMPORTANT: Get the sent message object
+            sent_message = await upload_to_telegram(update, context, file_path, caption, file_info)
             
-            # Auto-forward if enabled (FIXED: Removed original_link parameter)
+            # Auto-forward if enabled - Forward the UPLOADED FILE, not user's message
             if AUTO_FORWARD_ENABLED:
                 try:
-                    await forward_file_to_channel(context, user, update.message)
+                    await forward_file_to_channel(context, user, sent_message)
                     await send_auto_forward_notification(update, context)
                 except Exception as e:
                     logger.error(f"Auto-forward error: {e}")
@@ -166,12 +169,12 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                     )
                     
                     caption = f"📄 {file_info['name']} [{idx}/{total_files}]\n📦 {file_info['size_str']}"
-                    await upload_to_telegram(update, context, file_path, caption, file_info)
+                    sent_message = await upload_to_telegram(update, context, file_path, caption, file_info)
                     
-                    # Auto-forward each file (FIXED: Removed original_link parameter)
+                    # Auto-forward each file - Forward the UPLOADED FILE
                     if AUTO_FORWARD_ENABLED:
                         try:
-                            await forward_file_to_channel(context, user, update.message)
+                            await forward_file_to_channel(context, user, sent_message)
                         except Exception as e:
                             logger.error(f"Auto-forward error for file {idx}: {e}")
                     
@@ -214,3 +217,4 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode='Markdown'
         )
         return True
+            
