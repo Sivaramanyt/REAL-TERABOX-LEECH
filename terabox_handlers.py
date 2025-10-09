@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Terabox URL pattern
 TERABOX_PATTERN = re.compile(
-    r'https?://(?:www\.)?(terabox|teraboxapp|1024tera|4funbox)\.(com|app|fun)/(?:s/|wap/share/filelist\?surl=)[\w-]+',
+    r'https?://(?:www\.)?(terabox|teraboxapp|1024tera|4funbox|teraboxshare)\.(com|app|fun)/(?:s/|wap/share/filelist\?surl=)[\w-]+',
     re.IGNORECASE
 )
 
@@ -104,10 +104,10 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             await upload_to_telegram(update, context, file_path, caption, file_info)
             
-            # Auto-forward if enabled (Using your existing function)
+            # Auto-forward if enabled (FIXED: Removed original_link parameter)
             if AUTO_FORWARD_ENABLED:
                 try:
-                    await forward_file_to_channel(context, user, update.message, original_link=terabox_url)
+                    await forward_file_to_channel(context, user, update.message)
                     await send_auto_forward_notification(update, context)
                 except Exception as e:
                     logger.error(f"Auto-forward error: {e}")
@@ -167,6 +167,13 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                     
                     caption = f"📄 {file_info['name']} [{idx}/{total_files}]\n📦 {file_info['size_str']}"
                     await upload_to_telegram(update, context, file_path, caption, file_info)
+                    
+                    # Auto-forward each file (FIXED: Removed original_link parameter)
+                    if AUTO_FORWARD_ENABLED:
+                        try:
+                            await forward_file_to_channel(context, user, update.message)
+                        except Exception as e:
+                            logger.error(f"Auto-forward error for file {idx}: {e}")
                     
                     # Cleanup
                     cleanup_file(file_path)
