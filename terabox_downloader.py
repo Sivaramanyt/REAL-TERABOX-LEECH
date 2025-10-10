@@ -1,14 +1,14 @@
 """
-Terabox File Downloader - WORKING VERSION
-Handles redirects and chunked encoding properly
+Terabox File Downloader - WGET METHOD
+Most reliable for problematic servers
 """
 
 import os
 import asyncio
-import requests
 import logging
 import subprocess
 import time
+import re
 from concurrent.futures import ThreadPoolExecutor
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 DOWNLOAD_DIR = "downloads"
 THUMBNAIL_DIR = "thumbnails"
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024
-CHUNK_SIZE = 8192  # 8KB chunks
 MAX_RETRIES = 3
 PROGRESS_UPDATE_INTERVAL = 3
 
@@ -62,134 +61,113 @@ async def update_progress_message(message, downloaded, total_size, speed, start_
     except Exception as e:
         logger.debug(f"Progress update error: {e}")
 
-def download_file_sync_with_progress(url, file_path, total_size, update_func, message_id):
+def download_file_sync_with_wget(url, file_path, total_size, update_func):
     """
-    Synchronous download with proper chunked encoding handling
+    Download using wget - Most reliable method
     """
-    logger.info(f"⬇️ Starting download: {file_path}")
+    logger.info(f"⬇️ Starting wget download: {file_path}")
     
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             logger.info(f"🔄 Download attempt {attempt}/{MAX_RETRIES}")
             
-            start_byte = 0
+            # Remove partial file if exists
             if os.path.exists(file_path) and attempt > 1:
-                start_byte = os.path.getsize(file_path)
-                logger.info(f"📍 Resuming from byte {start_byte}")
+                os.remove(file_path)
+                logger.info(f"🗑️ Removed partial file")
             
-            # Create session with retry adapter
-            session = requests.Session()
+            # Wget command with optimal settings
+            cmd = [
+                'wget',
+                '--no-check-certificate',  # Ignore SSL issues
+                '--tries=3',  # Internal retries
+                '--timeout=60',  # 60 second timeout
+                '--read-timeout=900',  # 15 min read timeout
+                '--continue',  # Resume if possible
+                '--progress=dot:mega',  # Progress output
+                '-O', file_path,  # Output file
+                url
+            ]
             
-            # CRITICAL: Disable automatic decompression to handle chunked encoding properly
-            adapter = requests.adapters.HTTPAdapter(
-                pool_connections=5,
-                pool_maxsize=10,
-                max_retries=0
-            )
-            session.mount('http://', adapter)
-            session.mount('https://', adapter)
+            logger.info(f"🔥 Starting wget process...")
             
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': '*/*',
-                'Accept-Encoding': 'identity',  # CRITICAL: Disable gzip/deflate
-                'Connection': 'keep-alive'
-            }
-            
-            if start_byte > 0:
-                headers['Range'] = f'bytes={start_byte}-'
-            
-            # Warm-up on first attempt
-            if attempt == 1:
-                try:
-                    logger.info("🔥 Warming up connection...")
-                    session.head(url, timeout=15, allow_redirects=True)
-                    time.sleep(0.5)
-                except:
-                    pass
-            
-            # Download with streaming
-            response = session.get(
-                url,
-                headers=headers,
-                stream=True,  # CRITICAL: Enable streaming
-                timeout=(45, 900),
-                allow_redirects=True  # CRITICAL: Follow redirects
-            )
-            
-            response.raise_for_status()
-            
-            # Get total size
-            if not total_size:
-                content_length = response.headers.get('content-length')
-                if content_length:
-                    total_size = int(content_length) + start_byte
-                else:
-                    total_size = 0
-            
-            logger.info(f"📦 Total size: {format_size(total_size)}")
-            
-            # Download
-            mode = 'ab' if start_byte > 0 else 'wb'
-            downloaded = start_byte
             start_time = time.time()
             last_update_time = start_time
-            last_update_bytes = downloaded
+            downloaded = 0
             
             progress_state = {
-                'downloaded': downloaded,
+                'downloaded': 0,
                 'total_size': total_size,
                 'speed': 0,
                 'start_time': start_time
             }
             
-            with open(file_path, mode) as f:
-                # CRITICAL: Use iter_content with decode_unicode=False
-                for chunk in response.iter_content(chunk_size=CHUNK_SIZE, decode_unicode=False):
-                    if chunk:  # Filter out keep-alive new chunks
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        
-                        current_time = time.time()
-                        
-                        # Update progress
-                        if current_time - last_update_time >= PROGRESS_UPDATE_INTERVAL:
-                            bytes_since_update = downloaded - last_update_bytes
-                            time_since_update = current_time - last_update_time
-                            current_speed = bytes_since_update / time_since_update if time_since_update > 0 else 0
-                            
-                            progress_state['downloaded'] = downloaded
-                            progress_state['speed'] = current_speed
-                            
-                            if update_func:
-                                update_func(progress_state)
-                            
-                            logger.info(f"📥 Downloaded: {format_size(downloaded)} - Speed: {format_size(current_speed)}/s")
-                            
-                            last_update_time = current_time
-                            last_update_bytes = downloaded
-            
-            session.close()
-            
-            final_size = os.path.getsize(file_path)
-            total_time = time.time() - start_time
-            avg_speed = (final_size - start_byte) / total_time if total_time > 0 else 0
-            
-            logger.info(
-                f"✅ Download completed: {format_size(final_size)} | "
-                f"Time: {int(total_time)}s | "
-                f"Speed: {format_size(avg_speed)}/s"
+            # Start wget process
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1
             )
             
-            return True
+            # Monitor progress
+            for line in process.stdout:
+                # Parse wget progress: "2K .......... .......... .......... 0% 234K 3m12s"
+                match = re.search(r'(\d+)%\s+([\d.]+[KMG])', line)
+                if match:
+                    percentage = int(match.group(1))
+                    speed_str = match.group(2)
+                    
+                    # Calculate downloaded bytes
+                    if total_size > 0:
+                        downloaded = int((percentage / 100) * total_size)
+                    else:
+                        # Try to get from file size
+                        if os.path.exists(file_path):
+                            downloaded = os.path.getsize(file_path)
+                    
+                    # Parse speed
+                    speed = 0
+                    if 'K' in speed_str:
+                        speed = float(speed_str.replace('K', '')) * 1024
+                    elif 'M' in speed_str:
+                        speed = float(speed_str.replace('M', '')) * 1024 * 1024
+                    elif 'G' in speed_str:
+                        speed = float(speed_str.replace('G', '')) * 1024 * 1024 * 1024
+                    
+                    current_time = time.time()
+                    
+                    # Update progress
+                    if current_time - last_update_time >= PROGRESS_UPDATE_INTERVAL:
+                        progress_state['downloaded'] = downloaded
+                        progress_state['speed'] = speed
+                        
+                        if update_func:
+                            update_func(progress_state)
+                        
+                        logger.info(f"📥 Downloaded: {percentage}% - Speed: {format_size(speed)}/s")
+                        last_update_time = current_time
             
+            # Wait for process to complete
+            return_code = process.wait()
+            
+            if return_code == 0 and os.path.exists(file_path):
+                final_size = os.path.getsize(file_path)
+                total_time = time.time() - start_time
+                avg_speed = final_size / total_time if total_time > 0 else 0
+                
+                logger.info(
+                    f"✅ Download completed: {format_size(final_size)} | "
+                    f"Time: {int(total_time)}s | "
+                    f"Speed: {format_size(avg_speed)}/s"
+                )
+                return True
+            else:
+                raise Exception(f"Wget failed with code {return_code}")
+                
         except Exception as e:
             logger.warning(f"⚠️ Attempt {attempt} failed: {e.__class__.__name__}: {str(e)}")
-            
-            try:
-                session.close()
-            except:
-                pass
             
             if attempt < MAX_RETRIES:
                 wait_time = attempt * 2
@@ -202,7 +180,7 @@ def download_file_sync_with_progress(url, file_path, total_size, update_func, me
                 raise Exception(f"Download failed: {e}")
 
 async def download_file(url, file_path, total_size=0, status_message=None):
-    """Async wrapper with live Telegram progress updates"""
+    """Async wrapper for wget download"""
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     
     progress_data = {'downloaded': 0, 'total_size': total_size, 'speed': 0, 'start_time': time.time()}
@@ -228,12 +206,11 @@ async def download_file(url, file_path, total_size=0, status_message=None):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(
         executor,
-        download_file_sync_with_progress,
+        download_file_sync_with_wget,
         url,
         file_path,
         total_size,
-        progress_callback,
-        None
+        progress_callback
     )
     
     return True
@@ -375,4 +352,4 @@ def get_safe_filename(filename):
         name, ext = os.path.splitext(filename)
         filename = name[:200-len(ext)] + ext
     return filename
-    
+        
