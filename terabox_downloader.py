@@ -1,12 +1,12 @@
 """
-Terabox Downloader - Download files with progress tracking
-ORIGINAL WORKING VERSION
+Terabox Downloader - WITH THUMBNAIL GENERATION
 """
 
 import os
 import asyncio
 import logging
 import time
+import subprocess
 import aiohttp
 import aiofiles
 from telegram import Update
@@ -27,6 +27,43 @@ def create_progress_bar(percentage):
     filled = int(percentage / 10)
     empty = 10 - filled
     return '█' * filled + '░' * empty
+
+def generate_thumbnail(video_path):
+    """
+    Generate thumbnail from video using ffmpeg
+    Returns thumbnail path or None
+    """
+    try:
+        thumb_path = video_path + "_thumb.jpg"
+        
+        # Use ffmpeg to extract frame at 1 second
+        cmd = [
+            'ffmpeg',
+            '-i', video_path,
+            '-ss', '00:00:01.000',
+            '-vframes', '1',
+            '-vf', 'scale=320:320:force_original_aspect_ratio=decrease',
+            '-y',
+            thumb_path
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30
+        )
+        
+        if result.returncode == 0 and os.path.exists(thumb_path):
+            logger.info(f"✅ Thumbnail generated: {thumb_path}")
+            return thumb_path
+        else:
+            logger.warning(f"⚠️ Thumbnail generation failed")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ Thumbnail error: {e}")
+        return None
 
 async def update_progress(message, downloaded, total_size, start_time):
     """Update download progress message"""
@@ -114,7 +151,7 @@ async def download_file(url, filename, status_message=None):
         raise Exception(f"Download failed: {str(e)}")
 
 async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE, file_path, caption):
-    """Upload file to Telegram"""
+    """Upload file to Telegram with thumbnail support"""
     try:
         if not os.path.exists(file_path):
             raise Exception("File not found after download")
@@ -124,22 +161,53 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
         
         is_video = any(file_path.lower().endswith(ext) for ext in VIDEO_EXTENSIONS)
         
-        with open(file_path, 'rb') as f:
-            if is_video:
-                sent_msg = await update.message.reply_video(
-                    video=f,
-                    caption=caption,
-                    supports_streaming=True,
-                    read_timeout=300,
-                    write_timeout=300
-                )
-            else:
-                sent_msg = await update.message.reply_document(
-                    document=f,
-                    caption=caption,
-                    read_timeout=300,
-                    write_timeout=300
-                )
+        thumb_path = None
+        sent_msg = None
+        
+        try:
+            with open(file_path, 'rb') as f:
+                if is_video:
+                    # Generate thumbnail for video
+                    logger.info("📸 Generating thumbnail...")
+                    thumb_path = generate_thumbnail(file_path)
+                    
+                    # Upload video with thumbnail
+                    if thumb_path and os.path.exists(thumb_path):
+                        with open(thumb_path, 'rb') as thumb:
+                            sent_msg = await update.message.reply_video(
+                                video=f,
+                                caption=caption,
+                                thumbnail=thumb,
+                                supports_streaming=True,
+                                read_timeout=300,
+                                write_timeout=300
+                            )
+                    else:
+                        # Upload without thumbnail if generation failed
+                        sent_msg = await update.message.reply_video(
+                            video=f,
+                            caption=caption,
+                            supports_streaming=True,
+                            read_timeout=300,
+                            write_timeout=300
+                        )
+                else:
+                    # Upload as document
+                    sent_msg = await update.message.reply_document(
+                        document=f,
+                        caption=caption,
+                        read_timeout=300,
+                        write_timeout=300
+                    )
+        
+        finally:
+            # Cleanup thumbnail
+            if thumb_path and os.path.exists(thumb_path):
+                try:
+                    os.remove(thumb_path)
+                    logger.info("🗑️ Thumbnail cleaned up")
+                except:
+                    pass
         
         logger.info("✅ Upload complete")
         return sent_msg
@@ -157,4 +225,4 @@ def cleanup_file(file_path):
             logger.info(f"🗑️ Cleaned up: {file_path}")
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
-    
+        
