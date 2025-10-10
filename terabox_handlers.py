@@ -1,5 +1,6 @@
 """
 Terabox Handlers - Using WORKING processor.py method
+FIXED: Uses correct imports
 """
 
 import logging
@@ -12,12 +13,15 @@ from pathlib import Path
 from database import can_user_leech, increment_leech_attempts, get_user_data, needs_verification
 from handlers import send_verification_message
 from auto_forward import forward_file_to_channel
-from config import FREE_LEECH_LIMIT, AUTO_FORWARD_ENABLED, DOWNLOAD_DIR, LOGGER
+from config import FREE_LEECH_LIMIT, AUTO_FORWARD_ENABLED
 
 # Import working processor functions
 from processor import extract_terabox_info, download_with_micro_chunks_only, format_size
 
 logger = logging.getLogger(__name__)
+
+# Define DOWNLOAD_DIR locally
+DOWNLOAD_DIR = "downloads"
 
 TERABOX_PATTERN = re.compile(
     r'https?://(?:www\.)?(terabox|teraboxapp|1024tera|4funbox|teraboxshare|teraboxurl|1024terabox|terafileshare|teraboxlink|terasharelink)\.(com|app|fun)/(?:s/|wap/share/filelist\?surl=)[\w-]+',
@@ -51,7 +55,7 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     try:
         # Step 1: Extract file info using WORKING API
-        await status_msg.edit_text("📋 **Using wdzone-terabox-api...**", parse_mode='Markdown')
+        await status_msg.edit_text("📋 **Fetching file info...**", parse_mode='Markdown')
         file_info = extract_terabox_info(terabox_url)
         
         filename = file_info['filename']
@@ -82,8 +86,8 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"📁 **File Found**\n"
             f"📝 {filename}\n"
             f"📊 {format_size(file_size)}\n"
-            f"📊 Attempt #{used_attempts}\n\n"
-            f"🔬 **Starting download...**",
+            f"🔢 Attempt #{used_attempts}\n\n"
+            f"⬇️ **Downloading...**",
             parse_mode='Markdown'
         )
         
@@ -97,10 +101,11 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Step 4: Upload to Telegram
         await status_msg.edit_text("📤 **Uploading to Telegram...**", parse_mode='Markdown')
         
-        caption = f"📄 {filename}\n📊 {format_size(file_size)}\n🤖 Terabox Leech Bot"
+        caption = f"📄 {filename}\n📊 {format_size(file_size)}\n🤖 @{context.bot.username}"
         
         try:
             with open(file_path, 'rb') as file:
+                # Video files
                 if filename.lower().endswith(('.mp4', '.avi', '.mkv', '.mov', '.wmv', '.webm', '.m4v', '.3gp', '.ts')):
                     sent_message = await update.message.reply_video(
                         video=file,
@@ -109,11 +114,13 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                         read_timeout=300,
                         write_timeout=300
                     )
+                # Image files
                 elif filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
                     sent_message = await update.message.reply_photo(
                         photo=file,
                         caption=caption
                     )
+                # Document files
                 else:
                     sent_message = await update.message.reply_document(
                         document=file,
@@ -124,6 +131,13 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception as upload_error:
             logger.error(f"❌ Upload error: {upload_error}")
             await status_msg.edit_text(f"❌ **Upload failed:** {str(upload_error)}", parse_mode='Markdown')
+            
+            # Cleanup
+            try:
+                file_path.unlink(missing_ok=True)
+            except:
+                pass
+            
             return True
         
         logger.info(f"✅ Upload complete: {filename}")
@@ -147,11 +161,11 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         except:
             pass
         
-        # Show remaining attempts
+        # Step 7: Show remaining attempts
         if not is_verified and used_attempts < FREE_LEECH_LIMIT:
             remaining = FREE_LEECH_LIMIT - used_attempts
             await update.message.reply_text(
-                f"✅ **File uploaded!**\n⏳ Remaining: {remaining}/{FREE_LEECH_LIMIT}",
+                f"✅ **File uploaded!**\n⏳ Remaining free attempts: {remaining}/{FREE_LEECH_LIMIT}",
                 parse_mode='Markdown'
             )
         elif used_attempts >= FREE_LEECH_LIMIT and not is_verified:
@@ -164,6 +178,11 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         
     except Exception as e:
         logger.error(f"❌ Handler error: {e}")
-        await status_msg.edit_text(f"❌ **Error:** {str(e)}", parse_mode='Markdown')
+        
+        try:
+            await status_msg.edit_text(f"❌ **Error:** {str(e)}", parse_mode='Markdown')
+        except:
+            await update.message.reply_text(f"❌ **Error:** {str(e)}", parse_mode='Markdown')
+        
         return True
         
