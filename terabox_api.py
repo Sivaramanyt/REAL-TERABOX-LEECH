@@ -1,6 +1,5 @@
 """
-Terabox API - Extract file info using wdzone-terabox-api.vercel.app
-ORIGINAL WORKING VERSION
+Terabox API - FIXED for emoji field names
 """
 
 import requests
@@ -18,7 +17,7 @@ def format_size(bytes_size):
     return f"{bytes_size:.2f} PB"
 
 def parse_size_string(size_str):
-    """Convert size string like '41.23 MB' to bytes"""
+    """Convert size string like '8.64 MB' to bytes"""
     size_str = str(size_str).strip()
     match = re.match(r'([\d.]+)\s*([KMGT]?B)', size_str, re.IGNORECASE)
     if not match:
@@ -33,7 +32,7 @@ def parse_size_string(size_str):
 def extract_terabox_data(url):
     """
     Extract file data from Terabox using wdzone-terabox-api
-    Returns: dict with filename, size, download_url
+    FIXED: Handles emoji field names
     """
     try:
         logger.info(f"🔍 Extracting data from: {url}")
@@ -46,20 +45,52 @@ def extract_terabox_data(url):
         
         data = response.json()
         
-        if not data.get('success'):
-            error_msg = data.get('message', 'Unknown error from API')
-            raise Exception(f"API Error: {error_msg}")
+        logger.info(f"📄 API Response: {str(data)[:200]}")
         
-        file_data = data.get('data', {})
+        # Check for success - handle both formats
+        status_key = None
+        for key in data.keys():
+            if 'status' in key.lower():
+                status_key = key
+                break
         
-        if not file_data:
-            raise Exception("No file data returned from API")
+        if not status_key or 'success' not in data.get(status_key, '').lower():
+            raise Exception(f"API returned error")
         
-        # Extract info
-        filename = file_data.get('filename', 'unknown.file')
-        filesize_str = file_data.get('filesize', '0 B')
-        direct_link = file_data.get('directLink', '')
+        # Find the file info key (with emoji)
+        file_info_key = None
+        for key in data.keys():
+            if 'info' in key.lower() or 'extracted' in key.lower():
+                file_info_key = key
+                break
         
+        if not file_info_key:
+            raise Exception("No file info found in response")
+        
+        file_list = data.get(file_info_key, [])
+        
+        if not file_list or len(file_list) == 0:
+            raise Exception("No files found in response")
+        
+        file_data = file_list[0]
+        
+        # Extract data with emoji keys
+        filename = None
+        filesize_str = None
+        direct_link = None
+        
+        for key, value in file_data.items():
+            if 'title' in key.lower() or 'name' in key.lower():
+                filename = value
+            elif 'size' in key.lower():
+                filesize_str = value
+            elif 'link' in key.lower() or 'download' in key.lower():
+                direct_link = value
+        
+        if not filename:
+            filename = 'unknown.file'
+        if not filesize_str:
+            filesize_str = '0 B'
         if not direct_link:
             raise Exception("No download link found")
         
@@ -71,8 +102,8 @@ def extract_terabox_data(url):
             'size': file_size,
             'size_readable': format_size(file_size),
             'download_url': direct_link,
-            'thumb': file_data.get('thumb', ''),
-            'resolutions': file_data.get('resolutions', {}),
+            'thumb': '',
+            'resolutions': {},
         }
         
         logger.info(f"✅ Extracted: {filename} ({format_size(file_size)})")
@@ -85,4 +116,4 @@ def extract_terabox_data(url):
         raise Exception(f"Network error: {str(e)}")
     except Exception as e:
         raise Exception(f"Failed to extract data: {str(e)}")
-            
+        
