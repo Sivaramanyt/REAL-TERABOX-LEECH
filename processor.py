@@ -1,6 +1,5 @@
 """
-Terabox Processor - Working micro-chunk download method
-Uses wdzone-terabox-api.vercel.app
+Terabox Processor - WITH BACKUP API SUPPORT
 """
 
 import os
@@ -9,7 +8,7 @@ import asyncio
 import time
 from pathlib import Path
 
-MICRO_CHUNK_SIZE = 1024  # 1KB - Prevents IncompleteRead errors
+MICRO_CHUNK_SIZE = 1024  # 1KB
 UPDATE_INTERVAL = 100 * 1024  # 100KB
 
 def format_size(size_bytes):
@@ -38,28 +37,54 @@ def speed_string_to_bytes(size_str):
             return 0
 
 def extract_terabox_info(url):
-    """Extract file info using wdzone-terabox-api"""
-    try:
-        print(f"🔍 Processing URL: {url}")
-        
-        apiurl = f"https://wdzone-terabox-api.vercel.app/api?url={url}"
-        
-        response = requests.get(apiurl)
-        data = response.json()
-        
-        if data.get("success"):
-            file_data = data['data']
+    """
+    Extract file info using multiple APIs with fallback
+    """
+    # List of APIs to try
+    apis = [
+        f"https://wdzone-terabox-api.vercel.app/api?url={url}",
+        f"https://terabox-dl.qtcloud.workers.dev/api/get-info?shorturl={url}",
+        f"https://teradl-api.deno.dev/download?url={url}"
+    ]
+    
+    for api_url in apis:
+        try:
+            print(f"🔍 Trying API: {api_url[:50]}...")
             
-            return {
-                'filename': file_data.get('filename', 'unknown_file'),
-                'size': speed_string_to_bytes(file_data.get('filesize', '0')),
-                'download_url': file_data.get('directLink', '')
-            }
-        else:
-            raise Exception(f"API Error: {data.get('message', 'Unknown error')}")
+            response = requests.get(api_url, timeout=30)
+            data = response.json()
             
-    except Exception as e:
-        raise Exception(f"Failed to get file info: {str(e)}")
+            # wdzone-terabox-api format
+            if data.get("success") and data.get("data"):
+                file_data = data['data']
+                return {
+                    'filename': file_data.get('filename', 'unknown_file'),
+                    'size': speed_string_to_bytes(file_data.get('filesize', '0')),
+                    'download_url': file_data.get('directLink', '')
+                }
+            
+            # Alternative API format
+            elif data.get('ok') and data.get('file_name'):
+                return {
+                    'filename': data.get('file_name', 'unknown_file'),
+                    'size': int(data.get('file_size', 0)),
+                    'download_url': data.get('download_link', '')
+                }
+            
+            # Another format
+            elif data.get('downloadLink'):
+                return {
+                    'filename': data.get('fileName', 'unknown_file'),
+                    'size': int(data.get('fileSize', 0)),
+                    'download_url': data.get('downloadLink', '')
+                }
+                
+        except Exception as e:
+            print(f"⚠️ API failed: {str(e)}")
+            continue
+    
+    # If all APIs fail
+    raise Exception("All APIs failed. Please try again later or check if the link is valid.")
 
 async def download_with_micro_chunks_only(download_url, file_path, filename, status_msg, file_size):
     """
@@ -118,3 +143,4 @@ async def download_with_micro_chunks_only(download_url, file_path, filename, sta
         
     except Exception as e:
         raise Exception(f"Download failed: {str(e)}")
+            
