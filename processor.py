@@ -1,5 +1,5 @@
 """
-Terabox Processor - WITH BACKUP API SUPPORT
+Terabox Processor - FIXED based on anasty17's working method
 """
 
 import os
@@ -7,8 +7,9 @@ import requests
 import asyncio
 import time
 from pathlib import Path
+import re
 
-MICRO_CHUNK_SIZE = 1024  # 1KB
+MICRO_CHUNK_SIZE = 8192  # 8KB chunks (anasty17 uses this)
 UPDATE_INTERVAL = 100 * 1024  # 100KB
 
 def format_size(size_bytes):
@@ -21,84 +22,111 @@ def format_size(size_bytes):
 
 def speed_string_to_bytes(size_str):
     """Convert size string to bytes"""
-    size_str = size_str.replace(" ", "").upper()
-    if "KB" in size_str:
-        return float(size_str.replace("KB", "")) * 1024
-    elif "MB" in size_str:
-        return float(size_str.replace("MB", "")) * 1024 * 1024
-    elif "GB" in size_str:
-        return float(size_str.replace("GB", "")) * 1024 * 1024 * 1024
-    elif "TB" in size_str:
-        return float(size_str.replace("TB", "")) * 1024 * 1024 * 1024 * 1024
-    else:
-        try:
+    size_str = str(size_str).replace(" ", "").upper()
+    try:
+        if "KB" in size_str:
+            return float(size_str.replace("KB", "")) * 1024
+        elif "MB" in size_str:
+            return float(size_str.replace("MB", "")) * 1024 * 1024
+        elif "GB" in size_str:
+            return float(size_str.replace("GB", "")) * 1024 * 1024 * 1024
+        elif "TB" in size_str:
+            return float(size_str.replace("TB", "")) * 1024 * 1024 * 1024 * 1024
+        elif "B" in size_str:
             return float(size_str.replace("B", ""))
-        except:
-            return 0
+        else:
+            return int(size_str)
+    except:
+        return 0
 
 def extract_terabox_info(url):
     """
-    Extract file info using multiple APIs with fallback
+    Extract file info using wdzone-terabox-api (FIXED - anasty17 method)
     """
-    # List of APIs to try
-    apis = [
-        f"https://wdzone-terabox-api.vercel.app/api?url={url}",
-        f"https://terabox-dl.qtcloud.workers.dev/api/get-info?shorturl={url}",
-        f"https://teradl-api.deno.dev/download?url={url}"
-    ]
-    
-    for api_url in apis:
-        try:
-            print(f"🔍 Trying API: {api_url[:50]}...")
+    try:
+        print(f"🔍 Processing URL: {url}")
+        
+        # Clean URL first
+        url = url.strip()
+        
+        # Use requests with proper headers (like anasty17 does)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+        }
+        
+        # Build API URL
+        api_url = f"https://wdzone-terabox-api.vercel.app/api?url={url}"
+        
+        print(f"🌐 API URL: {api_url}")
+        
+        # Make request with timeout
+        response = requests.get(api_url, headers=headers, timeout=60)
+        
+        print(f"📊 Status Code: {response.status_code}")
+        print(f"📄 Response: {response.text[:200]}")  # Log first 200 chars
+        
+        # Parse JSON
+        data = response.json()
+        
+        # Check if successful
+        if not data.get("success"):
+            error_msg = data.get("message", "Unknown error")
+            raise Exception(f"API returned error: {error_msg}")
+        
+        # Extract file data
+        file_data = data.get('data', {})
+        
+        if not file_data:
+            raise Exception("No file data in response")
+        
+        filename = file_data.get('filename', 'unknown_file')
+        filesize_str = file_data.get('filesize', '0')
+        download_url = file_data.get('directLink', '')
+        
+        if not download_url:
+            raise Exception("No download URL found in response")
+        
+        file_size = speed_string_to_bytes(filesize_str)
+        
+        print(f"✅ File: {filename}, Size: {format_size(file_size)}")
+        print(f"🔗 Download URL: {download_url[:80]}...")
+        
+        return {
+            'filename': filename,
+            'size': file_size,
+            'download_url': download_url
+        }
             
-            response = requests.get(api_url, timeout=30)
-            data = response.json()
-            
-            # wdzone-terabox-api format
-            if data.get("success") and data.get("data"):
-                file_data = data['data']
-                return {
-                    'filename': file_data.get('filename', 'unknown_file'),
-                    'size': speed_string_to_bytes(file_data.get('filesize', '0')),
-                    'download_url': file_data.get('directLink', '')
-                }
-            
-            # Alternative API format
-            elif data.get('ok') and data.get('file_name'):
-                return {
-                    'filename': data.get('file_name', 'unknown_file'),
-                    'size': int(data.get('file_size', 0)),
-                    'download_url': data.get('download_link', '')
-                }
-            
-            # Another format
-            elif data.get('downloadLink'):
-                return {
-                    'filename': data.get('fileName', 'unknown_file'),
-                    'size': int(data.get('fileSize', 0)),
-                    'download_url': data.get('downloadLink', '')
-                }
-                
-        except Exception as e:
-            print(f"⚠️ API failed: {str(e)}")
-            continue
-    
-    # If all APIs fail
-    raise Exception("All APIs failed. Please try again later or check if the link is valid.")
+    except requests.Timeout:
+        raise Exception("API request timed out. Please try again.")
+    except requests.RequestException as e:
+        raise Exception(f"Network error: {str(e)}")
+    except ValueError as e:
+        raise Exception(f"Failed to parse API response: {str(e)}")
+    except Exception as e:
+        raise Exception(f"Failed to get file info: {str(e)}")
 
 async def download_with_micro_chunks_only(download_url, file_path, filename, status_msg, file_size):
     """
-    Download with 1KB micro-chunks - PREVENTS IncompleteRead errors
+    Download with 8KB micro-chunks (anasty17 method)
     """
     try:
+        print(f"⬇️ Starting download: {filename}")
+        
         headers = {
-            'User-Agent': 'curl/7.68.0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': '*/*',
-            'Connection': 'keep-alive'
+            'Connection': 'keep-alive',
+            'Accept-Encoding': 'gzip, deflate',
         }
         
         response = requests.get(download_url, headers=headers, stream=True, timeout=900)
         response.raise_for_status()
+        
+        # Get actual file size if not provided
+        if not file_size or file_size == 0:
+            file_size = int(response.headers.get('content-length', 0))
         
         downloaded = 0
         start_time = time.time()
@@ -143,4 +171,4 @@ async def download_with_micro_chunks_only(download_url, file_path, filename, sta
         
     except Exception as e:
         raise Exception(f"Download failed: {str(e)}")
-            
+        
