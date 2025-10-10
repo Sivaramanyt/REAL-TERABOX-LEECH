@@ -1,14 +1,12 @@
 """
-Terabox Downloader - WITH THUMBNAIL GENERATION
+Terabox Downloader - FIXED with reliable requests library
 """
 
 import os
-import asyncio
 import logging
 import time
 import subprocess
-import aiohttp
-import aiofiles
+import requests
 from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest, TimedOut, NetworkError
@@ -36,7 +34,6 @@ def generate_thumbnail(video_path):
     try:
         thumb_path = video_path + "_thumb.jpg"
         
-        # Use ffmpeg to extract frame at 1 second
         cmd = [
             'ffmpeg',
             '-i', video_path,
@@ -82,9 +79,9 @@ async def update_progress(message, downloaded, total_size, start_time):
         text = (
             f"⬇️ **Downloading...**\n\n"
             f"`{progress_bar}` {percentage:.1f}%\n\n"
-            f"📦 **Downloaded:** {format_size(downloaded)} / {format_size(total_size)}\n"
-            f"⚡ **Speed:** {format_size(speed)}/s\n"
-            f"⏱️ **ETA:** {int(eta)}s"
+            f"📦 {format_size(downloaded)} / {format_size(total_size)}\n"
+            f"⚡ {format_size(speed)}/s\n"
+            f"⏱️ ETA: {int(eta)}s"
         )
         
         await message.edit_text(text, parse_mode='Markdown')
@@ -96,7 +93,7 @@ async def update_progress(message, downloaded, total_size, start_time):
 
 async def download_file(url, filename, status_message=None):
     """
-    Download file from URL with progress tracking
+    Download file using requests (FIXED - More reliable than aiohttp)
     """
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     file_path = os.path.join(DOWNLOAD_DIR, filename)
@@ -110,41 +107,50 @@ async def download_file(url, filename, status_message=None):
             'Connection': 'keep-alive',
         }
         
+        # Use requests with stream=True
+        response = requests.get(url, headers=headers, stream=True, timeout=(30, 300))
+        response.raise_for_status()
+        
+        total_size = int(response.headers.get('content-length', 0))
+        
+        if total_size > MAX_FILE_SIZE:
+            raise Exception(f"File too large: {format_size(total_size)} (Max: 2GB)")
+        
         downloaded = 0
         start_time = time.time()
         last_update = 0
         
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=900)) as response:
-                response.raise_for_status()
-                
-                total_size = int(response.headers.get('content-length', 0))
-                
-                if total_size > MAX_FILE_SIZE:
-                    raise Exception(f"File too large: {format_size(total_size)} (Max: 2GB)")
-                
-                async with aiofiles.open(file_path, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(CHUNK_SIZE):
-                        await f.write(chunk)
-                        downloaded += len(chunk)
-                        
-                        # Update progress every 3 seconds
-                        current_time = time.time()
-                        if status_message and (current_time - last_update >= 3):
+        with open(file_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    
+                    # Update progress every 3 seconds
+                    current_time = time.time()
+                    if status_message and (current_time - last_update >= 3):
+                        import asyncio
+                        try:
                             await update_progress(status_message, downloaded, total_size, start_time)
-                            last_update = current_time
+                        except:
+                            pass
+                        last_update = current_time
         
         total_time = time.time() - start_time
         avg_speed = downloaded / total_time if total_time > 0 else 0
         
-        logger.info(f"✅ Download complete: {format_size(downloaded)} in {int(total_time)}s - Avg: {format_size(avg_speed)}/s")
+        logger.info(f"✅ Download complete: {format_size(downloaded)} in {int(total_time)}s - {format_size(avg_speed)}/s")
         
         return file_path
         
-    except asyncio.TimeoutError:
+    except requests.Timeout:
         if os.path.exists(file_path):
             os.remove(file_path)
-        raise Exception("Download timeout after 15 minutes")
+        raise Exception("Download timeout - server took too long")
+    except requests.ConnectionError:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise Exception("Connection error - check internet connection")
     except Exception as e:
         if os.path.exists(file_path):
             os.remove(file_path)
