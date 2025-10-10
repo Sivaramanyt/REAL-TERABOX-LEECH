@@ -1,11 +1,11 @@
 """
-Terabox Handlers - Complete working version
-Uses: terabox_api.py + terabox_downloader.py
-With: Verification + Auto-forward integration
+Terabox Handlers - WITH CONCURRENT PROCESSING
+Multiple users can download/upload simultaneously
 """
 
 import logging
 import re
+import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -25,48 +25,17 @@ TERABOX_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT_TYPE, terabox_url: str, user_id: int, status_msg):
     """
-    Main Terabox link handler
-    Complete flow: Detect → Extract → Download → Upload → Forward
+    Background task for downloading and uploading
+    This runs independently for each user
     """
-    user_id = update.effective_user.id
     user = update.effective_user
-    message_text = update.message.text
-    
-    # Check if message contains Terabox link
-    if not TERABOX_PATTERN.search(message_text):
-        return False
-    
-    match = TERABOX_PATTERN.search(message_text)
-    terabox_url = match.group(0)
-    
-    logger.info(f"📦 Terabox link detected from user {user_id}")
-    
-    # Check if user can leech
-    if not can_user_leech(user_id):
-        if needs_verification(user_id):
-            await send_verification_message(update, context)
-            return True
-        else:
-            await update.message.reply_text(
-                "❌ **Error checking your account.**\n\n"
-                "Please use /start to register.",
-                parse_mode='Markdown'
-            )
-            return True
-    
-    # Send initial processing message
-    status_msg = await update.message.reply_text(
-        "🔍 **Processing Terabox link...**",
-        parse_mode='Markdown'
-    )
-    
     file_path = None
     
     try:
-        # Step 1: Extract file information from Terabox
-        logger.info(f"📋 Extracting file info from: {terabox_url}")
+        # Step 1: Extract file information
+        logger.info(f"📋 [User {user_id}] Extracting file info")
         
         await status_msg.edit_text(
             "📋 **Fetching file information...**",
@@ -80,137 +49,146 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         size_readable = file_info['size_readable']
         download_url = file_info['download_url']
         
-        # Increment user's leech attempts
+        # Increment attempts
         increment_leech_attempts(user_id)
         user_data = get_user_data(user_id)
         used_attempts = user_data.get("leech_attempts", 0)
         is_verified = user_data.get("is_verified", False)
         
-        logger.info(f"✅ File info extracted: {filename} - {size_readable}")
+        logger.info(f"✅ [User {user_id}] File: {filename} - {size_readable}")
         
-        # Validate download URL
+        # Validate
         if not download_url:
             await status_msg.edit_text(
-                "❌ **Failed to get download link.**\n\n"
-                "The file might be private or the link is invalid.",
+                "❌ **Failed to get download link.**",
                 parse_mode='Markdown'
             )
-            return True
+            return
         
-        # Check file size limit (2GB)
-        max_size = 2 * 1024 * 1024 * 1024  # 2GB in bytes
+        # Check size
+        max_size = 2 * 1024 * 1024 * 1024
         if file_size > max_size:
             await status_msg.edit_text(
                 f"❌ **File too large!**\n\n"
-                f"📊 **File Size:** {size_readable}\n"
-                f"📊 **Maximum Allowed:** 2GB\n\n"
-                f"Please try a smaller file.",
+                f"📊 **Size:** {size_readable}\n"
+                f"📊 **Max:** 2GB",
                 parse_mode='Markdown'
             )
-            return True
+            return
         
-        # Show file information
+        # Show info
         await status_msg.edit_text(
             f"📁 **File Found!**\n\n"
-            f"📝 **Name:** `{filename}`\n"
-            f"📊 **Size:** {size_readable}\n"
-            f"🔢 **Attempt:** #{used_attempts}\n\n"
-            f"⬇️ **Starting download...**",
+            f"📝 `{filename}`\n"
+            f"📊 {size_readable}\n"
+            f"🔢 Attempt #{used_attempts}\n\n"
+            f"⬇️ **Downloading...**",
             parse_mode='Markdown'
         )
         
-        # Step 2: Download file
-        logger.info(f"⬇️ Starting download: {filename}")
-        
+        # Step 2: Download
+        logger.info(f"⬇️ [User {user_id}] Starting download")
         file_path = await download_file(download_url, filename, status_msg)
+        logger.info(f"✅ [User {user_id}] Download complete")
         
-        logger.info(f"✅ Download completed: {file_path}")
-        
-        # Step 3: Upload to Telegram
+        # Step 3: Upload
         await status_msg.edit_text(
-            "📤 **Uploading to Telegram...**\n\n"
-            "⏳ Please wait...",
+            "📤 **Uploading to Telegram...**",
             parse_mode='Markdown'
         )
         
-        bot_username = context.bot.username
-        caption = (
-            f"📄 **{filename}**\n"
-            f"📊 **Size:** {size_readable}\n"
-            f"🤖 **Bot:** @{bot_username}"
-        )
-        
+        caption = f"📄 **{filename}**\n📊 {size_readable}\n🤖 @{context.bot.username}"
         sent_message = await upload_to_telegram(update, context, file_path, caption)
+        logger.info(f"✅ [User {user_id}] Upload complete")
         
-        logger.info(f"✅ Upload completed for user {user_id}")
-        
-        # Step 4: Auto-forward to channel (if enabled)
+        # Step 4: Auto-forward
         if AUTO_FORWARD_ENABLED and sent_message:
             try:
                 await forward_file_to_channel(context, user, sent_message)
-                logger.info(f"✅ File auto-forwarded from user {user_id}")
-            except Exception as forward_error:
-                logger.error(f"⚠️ Auto-forward failed: {forward_error}")
+                logger.info(f"✅ [User {user_id}] File forwarded")
+            except Exception as e:
+                logger.error(f"⚠️ [User {user_id}] Forward failed: {e}")
         
-        # Step 5: Cleanup downloaded file
+        # Step 5: Cleanup
         cleanup_file(file_path)
         file_path = None
         
-        # Step 6: Delete status message
         try:
             await status_msg.delete()
         except:
             pass
         
-        # Step 7: Send completion message based on user status
+        # Step 6: Send completion message
         if not is_verified and used_attempts < FREE_LEECH_LIMIT:
-            # User still has free attempts
             remaining = FREE_LEECH_LIMIT - used_attempts
             await update.message.reply_text(
-                f"✅ **File uploaded successfully!**\n\n"
-                f"⏳ **Free attempts remaining:** {remaining}/{FREE_LEECH_LIMIT}",
+                f"✅ **File uploaded!**\n\n"
+                f"⏳ **Remaining:** {remaining}/{FREE_LEECH_LIMIT}",
                 parse_mode='Markdown'
             )
         elif used_attempts >= FREE_LEECH_LIMIT and not is_verified:
-            # User exhausted free attempts
-            await update.message.reply_text(
-                "✅ **File uploaded successfully!**",
-                parse_mode='Markdown'
-            )
+            await update.message.reply_text("✅ **File uploaded!**", parse_mode='Markdown')
             await send_verification_message(update, context)
         else:
-            # Verified user
             await update.message.reply_text(
-                "✅ **File uploaded successfully!**\n\n"
-                "♾️ **Status:** Premium (Unlimited access)",
+                "✅ **File uploaded!**\n♾️ **Status:** Premium",
                 parse_mode='Markdown'
             )
         
-        return True
-        
     except Exception as e:
-        logger.error(f"❌ Handler error for user {user_id}: {str(e)}")
+        logger.error(f"❌ [User {user_id}] Error: {e}")
         
-        # Cleanup on error
         if file_path:
             cleanup_file(file_path)
         
-        # Send error message
         try:
             await status_msg.edit_text(
-                f"❌ **Error occurred:**\n\n"
-                f"`{str(e)}`\n\n"
-                f"Please try again or contact support.",
+                f"❌ **Error:**\n`{str(e)}`",
                 parse_mode='Markdown'
             )
         except:
-            try:
-                await update.message.reply_text(
-                    f"❌ **Error:** {str(e)}",
-                    parse_mode='Markdown'
-                )
-            except:
-                pass
-        
-        return True
+            pass
+
+
+async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Main handler - Creates background task for each user
+    """
+    user_id = update.effective_user.id
+    message_text = update.message.text
+    
+    # Check pattern
+    if not TERABOX_PATTERN.search(message_text):
+        return False
+    
+    match = TERABOX_PATTERN.search(message_text)
+    terabox_url = match.group(0)
+    
+    logger.info(f"📦 [User {user_id}] Terabox link detected")
+    
+    # Check permissions
+    if not can_user_leech(user_id):
+        if needs_verification(user_id):
+            await send_verification_message(update, context)
+            return True
+        else:
+            await update.message.reply_text(
+                "❌ **Error checking account.**\nUse /start",
+                parse_mode='Markdown'
+            )
+            return True
+    
+    # Send initial message
+    status_msg = await update.message.reply_text(
+        "🔍 **Processing...**",
+        parse_mode='Markdown'
+    )
+    
+    # CREATE BACKGROUND TASK - This allows concurrent processing
+    asyncio.create_task(
+        process_terabox_download(update, context, terabox_url, user_id, status_msg)
+    )
+    
+    # Return immediately - don't wait for download to finish
+    return True
         
