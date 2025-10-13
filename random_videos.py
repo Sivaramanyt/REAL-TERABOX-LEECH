@@ -9,6 +9,7 @@ import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from database import get_db
+from telegram.helpers import escape_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +86,8 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             else:
                 await update.message.reply_text(
-                    "❌ **Error checking your account.**\n\n"
-                    "Please use /start to register.",
-                    parse_mode='Markdown'
+                    "❌ Error checking your account\\.\n\nPlease use /start to register\\.",
+                    parse_mode='MarkdownV2'
                 )
                 return
         
@@ -96,9 +96,8 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if total_videos == 0:
             await update.message.reply_text(
-                "📭 **No videos available yet!**\n\n"
-                "Please check back later.",
-                parse_mode='Markdown'
+                "📭 No videos available yet\\!\n\nPlease check back later\\.",
+                parse_mode='MarkdownV2'
             )
             return
         
@@ -107,9 +106,8 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if not random_videos:
             await update.message.reply_text(
-                "❌ **Error getting video!**\n\n"
-                "Please try again.",
-                parse_mode='Markdown'
+                "❌ Error getting video\\!\n\nPlease try again\\.",
+                parse_mode='MarkdownV2'
             )
             return
         
@@ -123,16 +121,15 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Send "getting video" message
         status_msg = await update.message.reply_text(
-            "🎬 **Getting random video for you...**\n\n"
-            "Please wait...",
-            parse_mode='Markdown'
+            "🎬 Getting random video for you\\.\\.\\.\n\nPlease wait\\.\\.\\.",
+            parse_mode='MarkdownV2'
         )
         
-        # Send the video
+        # Send the video - NO MARKDOWN in caption to avoid parsing errors
         caption = random_video.get('caption', '')
         if caption:
             caption += "\n\n"
-        caption += f"🎲 **Random Video** | 📊 Total: {total_videos}\n🤖 @{context.bot.username}"
+        caption += f"🎲 Random Video | 📊 Total: {total_videos}"
         
         # Create buttons
         keyboard = [
@@ -144,7 +141,6 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_video(
             video=random_video['file_id'],
             caption=caption,
-            parse_mode='Markdown',
             reply_markup=reply_markup
         )
         
@@ -163,28 +159,26 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_verified and used_attempts < FREE_VIDEO_LIMIT:
             remaining = FREE_VIDEO_LIMIT - used_attempts
             await update.message.reply_text(
-                f"✅ **Video sent successfully!**\n\n"
-                f"⏳ **Free videos remaining:** {remaining}/{FREE_VIDEO_LIMIT}",
-                parse_mode='Markdown'
+                f"✅ Video sent successfully\\!\n\n⏳ Free videos remaining: {remaining}/{FREE_VIDEO_LIMIT}",
+                parse_mode='MarkdownV2'
             )
         elif used_attempts >= FREE_VIDEO_LIMIT and not is_verified:
             await update.message.reply_text(
-                "✅ **Video sent successfully!**",
-                parse_mode='Markdown'
+                "✅ Video sent successfully\\!",
+                parse_mode='MarkdownV2'
             )
             await send_verification_message(update, context)
         else:
             await update.message.reply_text(
-                "✅ **Video sent!**\n\n"
-                "♾️ **Status:** Verified (Unlimited videos)",
-                parse_mode='Markdown'
+                "✅ Video sent\\!\n\n♾️ Status: Verified \\(Unlimited videos\\)",
+                parse_mode='MarkdownV2'
             )
         
     except Exception as e:
         logger.error(f"❌ Error sending random video: {e}")
         await update.message.reply_text(
-            f"❌ **Error:** {str(e)}",
-            parse_mode='Markdown'
+            f"❌ Error: {str(e)}",
+            parse_mode=None
         )
 
 async def handle_random_video_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -207,9 +201,8 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
         if not can_user_access_videos(user_id):
             if needs_verification(user_id):
                 await query.message.reply_text(
-                    "⏸️ **Free videos limit reached!**\n\n"
-                    "Please complete verification to continue watching videos.",
-                    parse_mode='Markdown'
+                    "⏸️ Free videos limit reached\\!\n\nPlease complete verification to continue watching videos\\.",
+                    parse_mode='MarkdownV2'
                 )
                 # Create fake update for verification
                 fake_update = Update(update_id=0, message=query.message)
@@ -221,8 +214,8 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
         
         if total_videos == 0:
             await query.edit_message_caption(
-                caption="📭 **No more videos available!**",
-                parse_mode='Markdown'
+                caption="📭 No more videos available\\!",
+                parse_mode='MarkdownV2'
             )
             return
         
@@ -236,16 +229,16 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
         random_videos = list(videos_collection.aggregate([{'$sample': {'size': 1}}]))
         
         if not random_videos:
-            await query.message.reply_text("❌ Error getting video!", parse_mode='Markdown')
+            await query.message.reply_text("❌ Error getting video!", parse_mode=None)
             return
         
         random_video = random_videos[0]
         
-        # Send new video
+        # Send new video - NO MARKDOWN to avoid parsing errors
         caption = random_video.get('caption', '')
         if caption:
             caption += "\n\n"
-        caption += f"🎲 **Random Video** | 📊 Total: {total_videos}\n🤖 @{context.bot.username}"
+        caption += f"🎲 Random Video | 📊 Total: {total_videos}"
         
         # Create buttons
         keyboard = [
@@ -261,7 +254,6 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
             chat_id=query.message.chat_id,
             video=random_video['file_id'],
             caption=caption,
-            parse_mode='Markdown',
             reply_markup=reply_markup
         )
         
@@ -278,21 +270,21 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
             remaining = FREE_VIDEO_LIMIT - used_attempts
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text=f"⏳ **Free videos remaining:** {remaining}/{FREE_VIDEO_LIMIT}",
-                parse_mode='Markdown'
+                text=f"⏳ Free videos remaining: {remaining}/{FREE_VIDEO_LIMIT}",
+                parse_mode=None
             )
         elif used_attempts >= FREE_VIDEO_LIMIT and not is_verified:
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text="⏸️ **Free limit reached!** Complete verification for unlimited videos.",
-                parse_mode='Markdown'
+                text="⏸️ Free limit reached! Complete verification for unlimited videos.",
+                parse_mode=None
             )
         
     except Exception as e:
         logger.error(f"❌ Error in callback: {e}")
         await query.message.reply_text(
-            f"❌ **Error:** {str(e)}",
-            parse_mode='Markdown'
+            f"❌ Error: {str(e)}",
+            parse_mode=None
         )
 
 async def video_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -315,16 +307,17 @@ async def video_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     popular = videos_collection.find_one(sort=[('sent_count', -1)])
     
     response = (
-        f"📊 **Video Collection Stats**\n\n"
-        f"📹 **Total Videos:** {total_videos}\n"
-        f"📤 **Total Sent:** {sent_count}\n\n"
+        f"📊 Video Collection Stats\n\n"
+        f"📹 Total Videos: {total_videos}\n"
+        f"📤 Total Sent: {sent_count}\n\n"
     )
     
     if popular:
         response += (
-            f"🏆 **Most Popular:**\n"
+            f"🏆 Most Popular:\n"
             f"📝 {popular['file_name']}\n"
             f"📊 Sent {popular['sent_count']} times"
         )
     
-    await update.message.reply_text(response, parse_mode='Markdown')
+    await update.message.reply_text(response, parse_mode=None)
+    
