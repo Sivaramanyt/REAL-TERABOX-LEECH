@@ -50,7 +50,7 @@ def get_user_data(user_id):
                 "is_verified": False,
                 "verify_token": None,
                 "token_expiry": None,
-                "verify_expiry": None,  # NEW: Track when verification expires
+                "verify_expiry": None,
                 "joined_date": datetime.now(),
                 "last_activity": datetime.now()
             }
@@ -82,6 +82,7 @@ def set_verification_token(user_id, token):
     try:
         expiry = datetime.now() + timedelta(seconds=VERIFY_TOKEN_TIMEOUT)
         logger.info(f"Setting token for user {user_id}, expires at: {expiry}")
+        
         users_collection.update_one(
             {"user_id": user_id},
             {
@@ -111,8 +112,6 @@ def verify_user(token):
         
         if user:
             logger.info(f"Token valid for user {user['user_id']}, marking as verified")
-            
-            # NEW: Set verification expiry to 1 hour from now
             verify_expiry = datetime.now() + timedelta(seconds=VERIFY_TOKEN_TIMEOUT)
             
             users_collection.update_one(
@@ -122,7 +121,7 @@ def verify_user(token):
                         "is_verified": True,
                         "verify_token": None,
                         "token_expiry": None,
-                        "verify_expiry": verify_expiry,  # NEW: Verification expires after 1 hour
+                        "verify_expiry": verify_expiry,
                         "last_activity": datetime.now()
                     }
                 }
@@ -160,22 +159,16 @@ def get_bot_stats():
         return {"total_users": 0, "verified_users": 0, "total_attempts": 0}
 
 def can_user_leech(user_id):
-    """
-    Check if user can make leech attempt
-    FIXED: Now checks if verification has expired
-    """
+    """Check if user can make leech attempt"""
     user = get_user_data(user_id)
     if not user:
         return False
     
-    # Check if user is verified
     if user.get("is_verified", False):
-        # NEW: Check if verification has expired
         verify_expiry = user.get("verify_expiry")
         if verify_expiry:
             current_time = datetime.now()
             if current_time > verify_expiry:
-                # Verification expired - reset user status
                 logger.info(f"Verification expired for user {user_id}")
                 users_collection.update_one(
                     {"user_id": user_id},
@@ -183,18 +176,16 @@ def can_user_leech(user_id):
                         "$set": {
                             "is_verified": False,
                             "verify_expiry": None,
-                            "leech_attempts": FREE_LEECH_LIMIT  # Reset to limit so they need to verify again
+                            "leech_attempts": FREE_LEECH_LIMIT
                         }
                     }
                 )
-                return False  # Need to verify again
+                return False
             else:
-                return True  # Still verified
+                return True
         else:
-            # Old users without expiry - keep them verified
             return True
     
-    # Check if user has remaining attempts
     return user.get("leech_attempts", 0) < FREE_LEECH_LIMIT
 
 def needs_verification(user_id):
@@ -203,12 +194,11 @@ def needs_verification(user_id):
     if not user:
         return False
     
-    # Check if verification expired
     if user.get("is_verified", False):
         verify_expiry = user.get("verify_expiry")
         if verify_expiry and datetime.now() > verify_expiry:
-            return True  # Verification expired, needs to verify again
-        return False  # Still verified
+            return True
+        return False
     
     return (not user.get("is_verified", False) and
             user.get("leech_attempts", 0) >= FREE_LEECH_LIMIT)
@@ -228,7 +218,7 @@ def clean_expired_tokens():
         return 0
 
 def clean_expired_verifications():
-    """Clean up expired verifications - NEW FUNCTION"""
+    """Clean up expired verifications"""
     try:
         current_time = datetime.now()
         result = users_collection.update_many(
@@ -250,43 +240,137 @@ def clean_expired_verifications():
         logger.error(f"Error cleaning expired verifications: {e}")
         return 0
 
-# ========== NEW: VIDEO FEATURE FUNCTIONS ==========
-# Add these at the END of database.py
+
+# ========== NEW: SEPARATE VIDEO VERIFICATION SYSTEM ==========
 
 def can_user_access_videos(user_id: int) -> bool:
-    """Check if user can access random videos (same logic as leech)"""
+    """Check if user can access random videos - SEPARATE from leech verification"""
     user = get_user_data(user_id)
     
     if not user:
         return False
     
-    if user.get("is_verified", False):
-        # Check if verification expired
-        verify_expiry = user.get("verify_expiry")
-        if verify_expiry:
-            from datetime import datetime
+    # Check if user is verified FOR VIDEOS specifically
+    if user.get("is_video_verified", False):
+        # Check if video verification expired
+        video_verify_expiry = user.get("video_verify_expiry")
+        if video_verify_expiry:
             current_time = datetime.now()
-            if current_time > verify_expiry:
+            if current_time > video_verify_expiry:
                 return False
         return True
     
+    # Not video-verified - check video attempts
     video_attempts = user.get("video_attempts", 0)
     from config import FREE_VIDEO_LIMIT
     return video_attempts < FREE_VIDEO_LIMIT
 
 def increment_video_attempts(user_id: int):
-    """Increment user's video view count"""
-    from datetime import datetime
-    users_collection.update_one(
-        {"user_id": user_id},
-        {
-            "$inc": {"video_attempts": 1},
-            "$set": {"last_activity": datetime.now()}
-        },
-        upsert=True
-    )
+    """Increment user's video view count (separate from leech attempts)"""
+    try:
+        users_collection.update_one(
+            {"user_id": user_id},
+            {
+                "$inc": {"video_attempts": 1},
+                "$set": {"last_activity": datetime.now()}
+            },
+            upsert=True
+        )
+    except Exception as e:
+        logger.error(f"Error incrementing video attempts: {e}")
+
+def needs_video_verification(user_id: int) -> bool:
+    """Check if user needs video verification (separate from leech verification)"""
+    user = get_user_data(user_id)
+    
+    if not user:
+        return False
+    
+    # Check if already video-verified and not expired
+    if user.get("is_video_verified", False):
+        video_verify_expiry = user.get("video_verify_expiry")
+        if video_verify_expiry:
+            current_time = datetime.now()
+            if current_time <= video_verify_expiry:
+                return False
+    
+    # Check if user has exhausted video attempts
+    video_attempts = user.get("video_attempts", 0)
+    from config import FREE_VIDEO_LIMIT
+    return video_attempts >= FREE_VIDEO_LIMIT
+
+def set_video_verification_token(user_id: int, token: str):
+    """Set video verification token (separate from leech token)"""
+    try:
+        expiry_time = datetime.now() + timedelta(seconds=VERIFY_TOKEN_TIMEOUT)
+        
+        users_collection.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "video_verify_token": token,
+                    "video_token_expiry": expiry_time,
+                    "last_activity": datetime.now()
+                }
+            },
+            upsert=True
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error setting video verification token: {e}")
+        return False
+
+def verify_video_user(user_id: int, token: str) -> bool:
+    """Verify user for videos (separate verification)"""
+    try:
+        current_time = datetime.now()
+        
+        user = users_collection.find_one({"user_id": user_id})
+        
+        if not user:
+            return False
+        
+        stored_token = user.get("video_verify_token")
+        token_expiry = user.get("video_token_expiry")
+        
+        if not stored_token or not token_expiry:
+            return False
+        
+        # Check if token expired
+        if current_time > token_expiry:
+            logger.info(f"Video verification token expired for user {user_id}")
+            return False
+        
+        # Check if token matches
+        if stored_token != token:
+            logger.info(f"Invalid video verification token for user {user_id}")
+            return False
+        
+        # Token is valid - mark user as video-verified
+        verify_expiry = current_time + timedelta(days=30)  # 30 days video verification
+        
+        users_collection.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "is_video_verified": True,
+                    "video_verify_expiry": verify_expiry,
+                    "last_activity": current_time
+                },
+                "$unset": {
+                    "video_verify_token": "",
+                    "video_token_expiry": ""
+                }
+            }
+        )
+        
+        logger.info(f"Video verification successful for user {user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error verifying video user: {e}")
+        return False
 
 def get_db():
     """Return database instance for video collection"""
     return db
-    
+                
