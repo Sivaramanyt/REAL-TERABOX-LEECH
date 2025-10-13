@@ -249,4 +249,44 @@ def clean_expired_verifications():
     except Exception as e:
         logger.error(f"Error cleaning expired verifications: {e}")
         return 0
+
+# ========== NEW: VIDEO FEATURE FUNCTIONS ==========
+# Add these at the END of database.py
+
+def can_user_access_videos(user_id: int) -> bool:
+    """Check if user can access random videos (same logic as leech)"""
+    user = get_user_data(user_id)
+    
+    if not user:
+        return False
+    
+    if user.get("is_verified", False):
+        # Check if verification expired
+        verify_expiry = user.get("verify_expiry")
+        if verify_expiry:
+            from datetime import datetime
+            current_time = datetime.now()
+            if current_time > verify_expiry:
+                return False
+        return True
+    
+    video_attempts = user.get("video_attempts", 0)
+    from config import FREE_VIDEO_LIMIT
+    return video_attempts < FREE_VIDEO_LIMIT
+
+def increment_video_attempts(user_id: int):
+    """Increment user's video view count"""
+    from datetime import datetime
+    users_collection.update_one(
+        {"user_id": user_id},
+        {
+            "$inc": {"video_attempts": 1},
+            "$set": {"last_activity": datetime.now()}
+        },
+        upsert=True
+    )
+
+def get_db():
+    """Return database instance for video collection"""
+    return db
     
