@@ -16,10 +16,10 @@ from handlers import (
 from database import init_db
 from health_server import run_health_server
 
-# 🎯 NEW IMPORT: Terabox handler
+# 🎯 Terabox handler import
 from terabox_handlers import handle_terabox_link
 
-# 🎬 NEW IMPORT: Random videos
+# 🎬 NEW: Random videos imports
 from random_videos import auto_save_video, send_random_video, handle_random_video_callback, video_stats_command
 
 logging.basicConfig(
@@ -52,7 +52,7 @@ def display_startup_info():
    ✅ Enabled with verification integration
 
 🎬 Random Videos:
-   ✅ Enabled with auto-save from channel
+   ✅ Enabled with SEPARATE video verification
    📺 Storage Channel: {VIDEO_STORAGE_CHANNEL if VIDEO_STORAGE_CHANNEL else 'Not configured'}
 
 ===== STARTUP COMPLETE =====
@@ -60,12 +60,8 @@ def display_startup_info():
     print(startup_info)
     logger.info("Bot configuration loaded successfully")
 
-# 🎯 NEW: Message router to handle Terabox links
 async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Route messages to appropriate handler
-    Priority: Terabox links first, then regular leech attempts
-    """
+    """Route messages to appropriate handler"""
     try:
         # Try Terabox handler first
         handled = await handle_terabox_link(update, context)
@@ -100,7 +96,7 @@ def main():
         application.add_handler(CommandHandler("leech", leech_attempt))
         application.add_handler(CommandHandler("stats", stats))
         
-        # 🎬 NEW: Random video command
+        # 🎬 NEW: Random video commands
         application.add_handler(CommandHandler("videos", send_random_video))
         application.add_handler(CommandHandler("videostats", video_stats_command))
         
@@ -115,7 +111,7 @@ def main():
             auto_save_video
         ))
         
-        # 🎯 MODIFIED: Use message_router instead of direct leech_attempt
+        # Message router for text messages
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
         
         # 🎬 NEW: Random video callback handler
@@ -127,7 +123,7 @@ def main():
         # Callback query handler (existing)
         application.add_handler(CallbackQueryHandler(verify_callback))
         
-        logger.info("🚀 Bot started successfully with Terabox Leech, Random Videos, Universal Shortlinks!")
+        logger.info("🚀 Bot started successfully with Terabox Leech, Random Videos (SEPARATE verification), Universal Shortlinks!")
         
         application.run_polling(allowed_updates=["message", "callback_query", "channel_post"])
         
