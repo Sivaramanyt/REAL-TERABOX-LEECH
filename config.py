@@ -102,6 +102,14 @@ FORWARD_CAPTION_TEMPLATE = """
 💰 **Revenue:** Monetized verification active
 🌐 **Shortlinks:** Universal system enabled
 
+# ========== NEW: VIDEO FEATURE CONFIGURATION ==========
+# Add these BEFORE the "# Validation" section
+
+# Video Storage Configuration
+VIDEO_STORAGE_CHANNEL = int(os.getenv("VIDEO_STORAGE_CHANNEL", "0"))  # Your private channel ID for videos
+FREE_VIDEO_LIMIT = int(os.getenv("FREE_VIDEO_LIMIT", "3"))  # Same as leech limit
+
+
 #LeechBot #AutoBackup #Monetized
 """
 
