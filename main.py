@@ -1,5 +1,5 @@
 """
-Terabox Leech Bot with Universal Shortlink Verification & Auto-Forward
+Terabox Leech Bot with Universal Shortlink Verification & Auto-Forward & Random Videos
 """
 
 import logging
@@ -18,6 +18,9 @@ from health_server import run_health_server
 
 # 🎯 NEW IMPORT: Terabox handler
 from terabox_handlers import handle_terabox_link
+
+# 🎬 NEW IMPORT: Random videos
+from random_videos import auto_save_video, send_random_video, handle_random_video_callback, video_stats_command
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -47,6 +50,10 @@ def display_startup_info():
 
 📦 Terabox Leech:
    ✅ Enabled with verification integration
+
+🎬 Random Videos:
+   ✅ Enabled with auto-save from channel
+   📺 Storage Channel: {VIDEO_STORAGE_CHANNEL if VIDEO_STORAGE_CHANNEL else 'Not configured'}
 
 ===== STARTUP COMPLETE =====
 """
@@ -93,21 +100,36 @@ def main():
         application.add_handler(CommandHandler("leech", leech_attempt))
         application.add_handler(CommandHandler("stats", stats))
         
+        # 🎬 NEW: Random video command
+        application.add_handler(CommandHandler("videos", send_random_video))
+        application.add_handler(CommandHandler("videostats", video_stats_command))
+        
         # Admin commands
         application.add_handler(CommandHandler("testforward", test_forward))
         application.add_handler(CommandHandler("testapi", test_shortlink))
         application.add_handler(CommandHandler("resetverify", reset_verify))
         
+        # 🎬 NEW: Auto-save videos from storage channel
+        application.add_handler(MessageHandler(
+            filters.ChatType.CHANNEL & filters.VIDEO,
+            auto_save_video
+        ))
+        
         # 🎯 MODIFIED: Use message_router instead of direct leech_attempt
-        # This routes Terabox links to Terabox handler, others to leech_attempt
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
         
-        # Callback query handler
+        # 🎬 NEW: Random video callback handler
+        application.add_handler(CallbackQueryHandler(
+            handle_random_video_callback,
+            pattern="^random_video$"
+        ))
+        
+        # Callback query handler (existing)
         application.add_handler(CallbackQueryHandler(verify_callback))
         
-        logger.info("🚀 Bot started successfully with Terabox Leech, Universal Shortlinks and Reset Verification!")
+        logger.info("🚀 Bot started successfully with Terabox Leech, Random Videos, Universal Shortlinks!")
         
-        application.run_polling(allowed_updates=["message", "callback_query"])
+        application.run_polling(allowed_updates=["message", "callback_query", "channel_post"])
         
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
@@ -115,4 +137,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-                         
+        
