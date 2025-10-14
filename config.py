@@ -34,7 +34,7 @@ VERIFY_TOKEN_TIMEOUT = int(os.getenv("VERIFY_TOKEN_TIMEOUT", "3600")) # 1 hour
 # ========== NEW: VIDEO FEATURE CONFIGURATION ==========
 VIDEO_STORAGE_CHANNEL = int(os.getenv("VIDEO_STORAGE_CHANNEL", "0")) # Your private channel ID for videos
 FREE_VIDEO_LIMIT = int(os.getenv("FREE_VIDEO_LIMIT", "3")) # Same as leech limit
-VIDEO_VERIFY_TOKEN_TIMEOUT = int(os.getenv("VIDEO_VERIFY_TOKEN_TIMEOUT", "86400")) # ✅ NEW: 24 hours for video verification
+VIDEO_VERIFY_TOKEN_TIMEOUT = int(os.getenv("VIDEO_VERIFY_TOKEN_TIMEOUT", "21600")) # ✅ NEW: 6 hours (21600 seconds)
 
 # Messages
 START_MESSAGE = """
