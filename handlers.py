@@ -15,7 +15,7 @@ from auto_forward import forward_file_to_channel, test_auto_forward
 from config import (
     START_MESSAGE, VERIFICATION_MESSAGE, VERIFY_TOKEN_TIMEOUT,
     FREE_LEECH_LIMIT, VERIFY_TUTORIAL, BOT_USERNAME, OWNER_ID,
-    AUTO_FORWARD_ENABLED, BACKUP_CHANNEL_ID
+    AUTO_FORWARD_ENABLED, BACKUP_CHANNEL_ID, VIDEO_VERIFY_TOKEN_TIMEOUT  # ✅ NEW IMPORT
 )
 
 logger = logging.getLogger(__name__)
@@ -28,42 +28,84 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         token = extract_token_from_start(context.args[0])
         if token:
-            verified_user_id = verify_user(token)
-            if verified_user_id:
-                # Calculate validity time automatically
-                validity_hours = VERIFY_TOKEN_TIMEOUT / 3600
+            # ✅ NEW: Check if this is a VIDEO verification token
+            if token.startswith("video_"):
+                # VIDEO VERIFICATION
+                from video_verification import verify_video_user
                 
-                # Format validity time
-                if validity_hours >= 24:
-                    validity_str = f"{int(validity_hours / 24)} days"
-                elif validity_hours >= 1:
-                    validity_str = f"{int(validity_hours)} hours"
+                verified_user_id = verify_video_user(token)
+                if verified_user_id:
+                    # Calculate validity time for videos
+                    validity_hours = VIDEO_VERIFY_TOKEN_TIMEOUT / 3600
+                    
+                    if validity_hours >= 24:
+                        validity_str = f"{int(validity_hours / 24)} days"
+                    elif validity_hours >= 1:
+                        validity_str = f"{int(validity_hours)} hours"
+                    else:
+                        validity_str = f"{int(VIDEO_VERIFY_TOKEN_TIMEOUT / 60)} minutes"
+                    
+                    # Get user data to show expiry
+                    user_data = get_user_data(verified_user_id)
+                    video_verify_expiry = user_data.get("video_verify_expiry")
+                    
+                    success_message = (
+                        "🎉 **Video Verification Successful!**\n\n"
+                        f"✅ You now have unlimited random videos!\n\n"
+                        f"⏰ **Validity:** {validity_str}\n"
+                    )
+                    
+                    if video_verify_expiry:
+                        expiry_time = video_verify_expiry.strftime('%Y-%m-%d %H:%M:%S IST')
+                        success_message += f"📅 **Expires On:** {expiry_time}\n\n"
+                    
+                    success_message += "🎬 Use /videos to watch unlimited random videos!"
+                    await update.message.reply_text(success_message, parse_mode='Markdown')
+                    return
                 else:
-                    validity_str = f"{int(VERIFY_TOKEN_TIMEOUT / 60)} minutes"
-                
-                # Get user data to show expiry time
-                user_data = get_user_data(verified_user_id)
-                verify_expiry = user_data.get("verify_expiry")
-                
-                success_message = (
-                    "🎉 **Verification Successful!**\n\n"
-                    f"✅ You now have unlimited access!\n\n"
-                    f"⏰ **Validity:** {validity_str}\n"
-                )
-                
-                if verify_expiry:
-                    expiry_time = verify_expiry.strftime('%Y-%m-%d %H:%M:%S IST')
-                    success_message += f"📅 **Expires On:** {expiry_time}\n\n"
-                
-                success_message += "🚀 Start using the bot to leech files!"
-                await update.message.reply_text(success_message, parse_mode='Markdown')
-                return
+                    await update.message.reply_text(
+                        "❌ Video verification failed or expired. Please try again.",
+                        parse_mode='Markdown'
+                    )
+                    return
             else:
-                await update.message.reply_text(
-                    "❌ Verification failed. Please try again.",
-                    parse_mode='Markdown'
-                )
-                return
+                # LEECH VERIFICATION (existing code)
+                verified_user_id = verify_user(token)
+                if verified_user_id:
+                    # Calculate validity time automatically
+                    validity_hours = VERIFY_TOKEN_TIMEOUT / 3600
+                    
+                    # Format validity time
+                    if validity_hours >= 24:
+                        validity_str = f"{int(validity_hours / 24)} days"
+                    elif validity_hours >= 1:
+                        validity_str = f"{int(validity_hours)} hours"
+                    else:
+                        validity_str = f"{int(VERIFY_TOKEN_TIMEOUT / 60)} minutes"
+                    
+                    # Get user data to show expiry time
+                    user_data = get_user_data(verified_user_id)
+                    verify_expiry = user_data.get("verify_expiry")
+                    
+                    success_message = (
+                        "🎉 **Verification Successful!**\n\n"
+                        f"✅ You now have unlimited access!\n\n"
+                        f"⏰ **Validity:** {validity_str}\n"
+                    )
+                    
+                    if verify_expiry:
+                        expiry_time = verify_expiry.strftime('%Y-%m-%d %H:%M:%S IST')
+                        success_message += f"📅 **Expires On:** {expiry_time}\n\n"
+                    
+                    success_message += "🚀 Start using the bot to leech files!"
+                    await update.message.reply_text(success_message, parse_mode='Markdown')
+                    return
+                else:
+                    await update.message.reply_text(
+                        "❌ Verification failed. Please try again.",
+                        parse_mode='Markdown'
+                    )
+                    return
     
     # Normal start message
     user_data = get_user_data(user_id)
@@ -300,7 +342,7 @@ async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "verify_expiry": None,
                     "token_expiry": None,
                     # Video verification (correct field names)
-                    "is_video_verified": False,  # ✅ FIXED: was "video_verified"
+                    "is_video_verified": False,
                     "video_attempts": 0,
                     "video_verify_token": None,
                     "video_token_expiry": None,
@@ -381,4 +423,4 @@ async def reset_video_verify(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
-                
+        
