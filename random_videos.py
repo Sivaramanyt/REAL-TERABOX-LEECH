@@ -2,6 +2,7 @@
 Random Video Feature with SEPARATE Video Verification System
 Videos and Leech have independent verification systems
 AUTO-REGISTERS users who use /videos without /start
+FIXED: Increments attempts AFTER successful video send (not before)
 """
 
 import logging
@@ -71,6 +72,7 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Send a random video from saved collection
     WITH SEPARATE VIDEO VERIFICATION SYSTEM
     AUTO-REGISTERS new users
+    FIXED: Increments attempts AFTER successful send
     """
     user_id = update.effective_user.id
     
@@ -99,7 +101,7 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         video_attempts = user_data.get("video_attempts", 0)
         is_video_verified = user_data.get("is_video_verified", False)
         
-        # Check if user needs VIDEO verification (separate from leech)
+        # ✅ Check if user needs VIDEO verification BEFORE sending video
         if not is_video_verified and video_attempts >= FREE_VIDEO_LIMIT:
             await send_video_verification_message(update, context)
             return
@@ -128,10 +130,6 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         random_video = random_videos[0]
-        
-        # NOW increment user's video attempts
-        increment_video_attempts(user_id)
-        used_attempts = video_attempts + 1
         
         # Send "getting video" message
         status_msg = await update.message.reply_text(
@@ -167,6 +165,11 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             {'$inc': {'sent_count': 1}}
         )
         
+        # ✅ NOW increment user's video attempts AFTER successful send
+        increment_video_attempts(user_id)
+        user_data = get_user_data(user_id)  # Get fresh data
+        used_attempts = user_data.get("video_attempts", 0)
+        
         logger.info(f"✅ Sent random video to user {user_id} (Video attempt #{used_attempts})")
         
         # Show remaining attempts or verification message
@@ -201,6 +204,7 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
     """
     Handle "Next Video" button click
     WITH SEPARATE VIDEO VERIFICATION CHECK
+    FIXED: Increments attempts AFTER successful send
     """
     query = update.callback_query
     await query.answer()
@@ -208,7 +212,7 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
     user_id = update.effective_user.id
     
     # Import video verification functions
-    from database import can_user_access_videos, increment_video_attempts, get_user_data, needs_video_verification, users_collection
+    from database import increment_video_attempts, get_user_data, users_collection
     from video_verification import send_video_verification_message
     from config import FREE_VIDEO_LIMIT
     
@@ -229,18 +233,20 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
             users_collection.insert_one(user_data)
             logger.info(f"✅ Auto-registered new user {user_id} via video callback")
         
-        # Check if user can access videos (separate verification)
-        if not can_user_access_videos(user_id):
-            if needs_video_verification(user_id):
-                await query.message.reply_text(
-                    "⏸️ **Free videos limit reached!**\n\n"
-                    "Please complete **video verification** to continue watching.",
-                    parse_mode='Markdown'
-                )
-                # Create fake update for verification
-                fake_update = Update(update_id=0, message=query.message)
-                await send_video_verification_message(fake_update, context)
-                return
+        video_attempts = user_data.get("video_attempts", 0)
+        is_video_verified = user_data.get("is_video_verified", False)
+        
+        # ✅ Check if user can access videos BEFORE sending (don't increment yet!)
+        if not is_video_verified and video_attempts >= FREE_VIDEO_LIMIT:
+            await query.message.reply_text(
+                "⏸️ **Free videos limit reached!**\n\n"
+                "Please complete **video verification** to continue watching.",
+                parse_mode='Markdown'
+            )
+            # Create fake update for verification
+            fake_update = Update(update_id=0, message=query.message)
+            await send_video_verification_message(fake_update, context)
+            return
         
         # Get total count
         total_videos = videos_collection.count_documents({})
@@ -251,12 +257,6 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
                 parse_mode='Markdown'
             )
             return
-        
-        # Increment attempts
-        increment_video_attempts(user_id)
-        user_data = get_user_data(user_id)
-        used_attempts = user_data.get("video_attempts", 0)
-        is_video_verified = user_data.get("is_video_verified", False)
         
         # Get random video
         random_videos = list(videos_collection.aggregate([{'$sample': {'size': 1}}]))
@@ -295,6 +295,11 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
             {'file_id': random_video['file_id']},
             {'$inc': {'sent_count': 1}}
         )
+        
+        # ✅ NOW increment attempts AFTER successful send
+        increment_video_attempts(user_id)
+        user_data = get_user_data(user_id)  # Get fresh data
+        used_attempts = user_data.get("video_attempts", 0)
         
         logger.info(f"✅ Sent next video to user {user_id} (Video attempt #{used_attempts})")
         
@@ -353,4 +358,4 @@ async def video_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     
     await update.message.reply_text(response, parse_mode='Markdown')
-        
+    
