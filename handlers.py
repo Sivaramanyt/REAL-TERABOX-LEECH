@@ -34,7 +34,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Import video verification handler
             from video_verification import handle_video_verification_callback
             # Remove the "video_" prefix to get actual token
-            actual_token = token_arg.replace('video_', '')
+            actual_token = token_arg[6:]  # Remove first 6 characters "video_"
+            logger.info(f"Processing video verification for user {user_id}")
             await handle_video_verification_callback(update, context, actual_token)
             return
         else:
@@ -268,4 +269,4 @@ async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
-        
+    
