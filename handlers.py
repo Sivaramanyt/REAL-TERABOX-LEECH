@@ -280,6 +280,9 @@ async def debug_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    IMPROVED RESET FUNCTION - Resets BOTH video and Terabox leech verification
+    """
     user_id = update.effective_user.id
     if user_id != OWNER_ID:
         await update.message.reply_text("❌ Only the bot owner can use this command.")
@@ -291,17 +294,37 @@ async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             target_id = user_id
         
+        # RESET BOTH VIDEO AND TERABOX LEECH VERIFICATION
         result = users_collection.update_one(
             {"user_id": target_id},
-            {"$set": {"is_verified": False, "leech_attempts": 0}}
+            {
+                "$set": {
+                    "is_verified": False,
+                    "leech_attempts": 0,
+                    "video_verified": False,
+                    "video_attempts": 0,
+                    "verify_token": None,
+                    "verify_expiry": None
+                }
+            }
         )
         
         if result.modified_count > 0:
             await update.message.reply_text(
-                f"✅ Verification RESET for user {target_id}. User will now see verification link again."
+                f"✅ **FULL RESET COMPLETE** for user `{target_id}`\n\n"
+                f"🔄 **Reset Items:**\n"
+                f"• Video Verification\n"
+                f"• Terabox Leech Verification\n"
+                f"• All Attempt Counters\n"
+                f"• Verification Tokens\n\n"
+                f"User will now need to verify again for both features!",
+                parse_mode='Markdown'
             )
         else:
-            await update.message.reply_text("ℹ️ No change. User may not exist or already unverified.")
+            await update.message.reply_text(
+                "ℹ️ No change made. User may not exist or already reset.",
+                parse_mode='Markdown'
+            )
     except Exception as e:
-        await update.message.reply_text(f"❌ Error resetting verification: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
     
