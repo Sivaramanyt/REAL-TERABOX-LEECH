@@ -8,7 +8,7 @@ import re
 import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
-from database import can_user_leech, increment_leech_attempts, get_user_data, needs_verification, update_user
+from database import can_user_leech, increment_leech_attempts, get_user_data, needs_verification, set_verification_token
 from auto_forward import forward_file_to_channel
 from config import FREE_LEECH_LIMIT, AUTO_FORWARD_ENABLED
 from verification import generate_verify_token, generate_monetized_verification_link
@@ -128,7 +128,7 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
             elif used_attempts >= FREE_LEECH_LIMIT and not is_verified:
                 # User hit limit - Generate and send verification link directly
                 token = generate_verify_token()
-                update_user(user_id, verify_token=token)
+                set_verification_token(user_id, token)
                 
                 # Create monetized verification link
                 bot_username = context.bot.username
@@ -190,7 +190,7 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         if needs_verification(user_id):
             # Generate verification link directly
             token = generate_verify_token()
-            update_user(user_id, verify_token=token)
+            set_verification_token(user_id, token)
             bot_username = context.bot.username
             verify_link = generate_monetized_verification_link(bot_username, token)
             
