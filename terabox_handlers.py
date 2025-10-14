@@ -24,7 +24,6 @@ TERABOX_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-
 async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT_TYPE, terabox_url: str, user_id: int, status_msg):
     """
     Background task for downloading and uploading
@@ -42,10 +41,12 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
         )
         
         file_info = extract_terabox_data(terabox_url)
-        filename = file_info['filename']
-        file_size = file_info['size']
-        size_readable = file_info['size_readable']
-        download_url = file_info['download_url']
+        
+        # ✅ FIXED: Use 'file_name' instead of 'filename' to match API response
+        filename = file_info.get('file_name') or file_info.get('filename', 'Unknown')
+        file_size = file_info.get('size', 0)
+        size_readable = file_info.get('size_readable', 'Unknown')
+        download_url = file_info.get('download_url', '')
         
         # Increment attempts
         increment_leech_attempts(user_id)
@@ -161,6 +162,7 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
         logger.error(f"❌ [User {user_id}] Error: {e}")
         if file_path:
             cleanup_file(file_path)
+        
         try:
             await status_msg.edit_text(
                 f"❌ **Error:**\n`{str(e)}`",
@@ -168,7 +170,6 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
             )
         except:
             pass
-
 
 async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -183,6 +184,7 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     match = TERABOX_PATTERN.search(message_text)
     terabox_url = match.group(0)
+    
     logger.info(f"📦 [User {user_id}] Terabox link detected")
     
     # Check permissions
@@ -191,6 +193,7 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Generate verification link directly
             token = generate_verify_token()
             set_verification_token(user_id, token)
+            
             bot_username = context.bot.username
             verify_link = generate_monetized_verification_link(bot_username, token)
             
