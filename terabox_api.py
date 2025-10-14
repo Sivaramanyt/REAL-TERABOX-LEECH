@@ -1,7 +1,7 @@
 """
 Terabox API - Based on Z-Mirror Implementation + WDZone
-Uses Cloudflare Workers + Vercel (ALL FREE APIs)
-https://github.com/Dawn-India/Z-Mirror
+Uses 4 FREE APIs with proper response parsing for all formats
+GitHub: https://github.com/Dawn-India/Z-Mirror
 """
 
 import requests
@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
 
 class TeraboxAPI:
     def __init__(self):
@@ -131,7 +132,7 @@ class TeraboxAPI:
             # WDZone error format
             if "❌ Status" in data and data["❌ Status"] == "Error":
                 return True
-            # Generic error format
+            # Generic error formats
             if "status" in data and data["status"] == "error":
                 return True
             if "error" in data:
@@ -139,23 +140,42 @@ class TeraboxAPI:
         return False
     
     def _parse_response(self, data: Dict, video_quality: str, api_name: str) -> List[Dict]:
-        """Parse API response and extract file info"""
+        """Parse API response and extract file info - FIXED FOR ALL FORMATS"""
         files = []
         
         try:
-            # WDZone format
+            # WDZone format (emoji keys)
             if api_name == "WDZone":
                 if "✅ Status" in data and data["✅ Status"] == "Success":
                     extracted_info = data.get("📜 Extracted Info")
                     if extracted_info and isinstance(extracted_info, list):
                         for item in extracted_info:
-                            files.append({
-                                "name": item.get("📄 File Name", "Terabox File"),
-                                "size": item.get("📦 File Size", "Unknown"),
-                                "download_url": item.get("🔗 Direct Download Link")
-                            })
+                            download_url = item.get("🔗 Direct Download Link")
+                            if download_url:
+                                files.append({
+                                    "name": item.get("📄 File Name", "Terabox File"),
+                                    "size": item.get("📦 File Size", "Unknown"),
+                                    "download_url": download_url
+                                })
             
-            # Format 1: Direct response list (SaveTube)
+            # NepCoderDevs / UdayScriptsX format (FIXED!)
+            elif api_name in ["NepCoderDevs", "UdayScriptsX"]:
+                # These APIs return: {file_name, direct_link, size, link, thumb, sizebytes}
+                if "direct_link" in data and data.get("direct_link"):
+                    files.append({
+                        "name": data.get("file_name", "Terabox File"),
+                        "size": data.get("size", "Unknown"),
+                        "download_url": data["direct_link"]
+                    })
+                # Fallback to "link" if direct_link not present
+                elif "link" in data and data.get("link"):
+                    files.append({
+                        "name": data.get("file_name", "Terabox File"),
+                        "size": data.get("size", "Unknown"),
+                        "download_url": data["link"]
+                    })
+            
+            # SaveTube format (response list)
             elif isinstance(data, dict) and "response" in data:
                 response_data = data["response"]
                 if isinstance(response_data, list):
@@ -164,13 +184,13 @@ class TeraboxAPI:
                         if file_info:
                             files.append(file_info)
             
-            # Format 2: Single file with resolutions
+            # Resolutions format
             elif isinstance(data, dict) and "resolutions" in data:
                 file_info = self._extract_file_info(data, video_quality)
                 if file_info:
                     files.append(file_info)
             
-            # Format 3: Direct download_url
+            # Generic download_url format
             elif isinstance(data, dict) and "download_url" in data:
                 files.append({
                     "name": data.get("file_name", "Terabox File"),
@@ -178,7 +198,7 @@ class TeraboxAPI:
                     "download_url": data["download_url"]
                 })
             
-            # Format 4: Nested data structure
+            # Nested data structure
             elif isinstance(data, dict) and "data" in data:
                 data_content = data["data"]
                 if isinstance(data_content, list):
@@ -245,7 +265,7 @@ def extract_terabox_data(url: str) -> Dict:
 def format_size(size_input) -> str:
     """
     Format bytes to human readable size
-    Handles both int and string inputs
+    Handles both int and string inputs (e.g., "18.08 MB")
     """
     try:
         # If it's already a formatted string (e.g., "125 MB"), return as-is
@@ -261,7 +281,7 @@ def format_size(size_input) -> str:
         # Convert to int
         size_bytes = int(size_input)
         
-        # Format
+        # Format to human readable
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
             if size_bytes < 1024.0:
                 return f"{size_bytes:.2f} {unit}"
@@ -270,4 +290,4 @@ def format_size(size_input) -> str:
         return f"{size_bytes:.2f} PB"
     except:
         return str(size_input)
-                
+        
