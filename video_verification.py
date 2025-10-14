@@ -1,12 +1,12 @@
 """
 Video Verification System - Separate from Leech Verification
 FIXED: Proper user_id extraction from all contexts (message, callback, effective_user)
+FIXED: Direct shortlink creation without verify_ prefix
 """
 
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-
 from database import (
     get_user_data, set_video_verification_token, verify_video_user
 )
@@ -33,8 +33,7 @@ def get_user_id_from_update(update: Update) -> int:
         if update.effective_user:
             return update.effective_user.id
         
-        # Should never reach here, but log if it does
-        logger.error("❌ Could not extract user_id from update!")
+        logger.error("❌ Could not extract user_id from update")
         return None
     except Exception as e:
         logger.error(f"❌ Error extracting user_id: {e}")
@@ -42,113 +41,91 @@ def get_user_id_from_update(update: Update) -> int:
 
 async def send_video_verification_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Send video verification message
-    FIXED: Properly extracts user_id from any context
+    Send VIDEO verification message with shortlink
+    FIXED: Uses direct shortlink without verify_ prefix
     """
-    # ✅ FIXED: Get user_id safely from any context
     user_id = get_user_id_from_update(update)
     
     if not user_id:
-        logger.error("❌ Cannot send verification - user_id not found")
+        logger.error("❌ Could not extract user_id from update")
         return
     
-    user_data = get_user_data(user_id)
-    
-    if not user_data:
-        message_text = "❌ User data not found. Please use /start"
-        
-        # Send to appropriate context
-        if update.message:
-            await update.message.reply_text(message_text)
-        elif update.callback_query:
-            await update.callback_query.message.reply_text(message_text)
-        return
-    
-    video_attempts = user_data.get("video_attempts", 0)
-    
-    # Generate token
+    # Generate random token (no prefix)
     token = generate_verify_token()
-    set_video_verification_token(user_id, token)
+    
+    # Store token in database (no prefix)
+    if not set_video_verification_token(user_id, token):
+        await update.effective_message.reply_text(
+            "❌ **Error setting up verification**\n\nPlease try again.",
+            parse_mode='Markdown'
+        )
+        return
     
     logger.info(f"✅ Generated video verification token for user {user_id}: video_{token}")
     
-    # Create bot deep link
-    video_token = f"video_{token}"
-    bot_link = f"https://t.me/{BOT_USERNAME}?start={video_token}"
+    # ✅ FIXED: Create Telegram deep link with video_ prefix
+    telegram_url = f"https://t.me/{BOT_USERNAME}?start=video_{token}"
     
-    # Create shortlink
-    verification_link = create_universal_shortlink(bot_link)
+    # ✅ FIXED: Create shortlink directly (not using generate_monetized_verification_link)
+    shortlink = create_universal_shortlink(telegram_url)
     
+    if not shortlink or shortlink == telegram_url:
+        logger.error("❌ Failed to create video verification shortlink")
+        shortlink = telegram_url
+    
+    logger.info(f"🔗 Video verification shortlink created: {shortlink}")
+    
+    # Send verification message
+    message = (
+        "🎬 **Video Verification Required**\n\n"
+        f"You've used **{FREE_VIDEO_LIMIT}/{FREE_VIDEO_LIMIT}** free videos!\n\n"
+        "To continue watching random videos:\n\n"
+        "🔹 Click \"✅ Verify for Videos\" below\n"
+        "🔹 Complete the verification\n"
+        "🔹 Return and use /videos\n\n"
+        "**After verification:**\n"
+        "♾️ Unlimited random videos\n\n"
+        "**Note:** This is **separate** from Terabox leech verification."
+    )
+    
+    # Create inline keyboard
     keyboard = [
-        [InlineKeyboardButton("✅ Verify for Videos", url=verification_link)],
-        [InlineKeyboardButton("📢 Join Channel", url="https://t.me/RARE_VIDEOS")]
+        [InlineKeyboardButton("✅ Verify for Videos", url=shortlink)],
+        [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/RARE_VIDEOS")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message = (
-        f"🎬 **Video Verification Required**\n\n"
-        f"You've used **{video_attempts}/{FREE_VIDEO_LIMIT}** free videos!\n\n"
-        f"To continue watching random videos:\n\n"
-        f"🔹 Click \"✅ Verify for Videos\" below\n"
-        f"🔹 Complete the verification\n"
-        f"🔹 Return and use `/videos`\n\n"
-        f"**After verification:**\n"
-        f"♾️ Unlimited random videos\n\n"
-        f"**Note:** This is separate from Terabox leech verification."
+    await update.effective_message.reply_text(
+        message,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
-    
-    # Send to appropriate context
-    if update.message:
-        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
-    elif update.callback_query:
-        await update.callback_query.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
-    
-    logger.info(f"✅ Sent video verification to user {user_id}")
 
-async def handle_video_verification_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, token: str):
+async def handle_video_verification_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle video verification callback when user returns from shortlink
-    FIXED: Properly extracts user_id from any context
+    Handle video verification button clicks
+    This is called when user clicks "Verify for Videos" button
     """
-    # ✅ FIXED: Get user_id safely from any context
+    query = update.callback_query
+    await query.answer()
+    
     user_id = get_user_id_from_update(update)
     
     if not user_id:
-        logger.error("❌ Cannot verify - user_id not found")
+        await query.message.reply_text("❌ Error: Could not identify user")
         return
     
-    logger.info(f"🔍 Video verification attempt for user {user_id} with token: video_{token}")
-    
-    if verify_video_user(user_id, token):
-        success_message = (
-            "🎉 **Video Verification Successful!**\n\n"
-            "✅ You now have unlimited access to random videos!\n"
-            "🎬 Use `/videos` to watch videos!"
+    # Check if user is already verified
+    user_data = get_user_data(user_id)
+    if user_data and user_data.get("is_video_verified", False):
+        await query.message.reply_text(
+            "✅ **Already Verified!**\n\n"
+            "You already have unlimited video access!\n\n"
+            "Use /videos to watch random videos.",
+            parse_mode='Markdown'
         )
-        
-        # Send to appropriate context
-        if update.message:
-            await update.message.reply_text(success_message, parse_mode='Markdown')
-        elif update.callback_query:
-            await update.callback_query.message.reply_text(success_message, parse_mode='Markdown')
-        
-        logger.info(f"✅ Video verification SUCCESS for user {user_id}")
-    else:
-        fail_message = (
-            "❌ **Video Verification Failed**\n\n"
-            "**Possible reasons:**\n"
-            "🔸 The link has expired (6 hours timeout)\n"
-            "🔸 You clicked an old verification link\n"
-            "🔸 Token mismatch or already used\n\n"
-            "**Solution:**\n"
-            "Try `/videos` again to get a NEW verification link!"
-        )
-        
-        # Send to appropriate context
-        if update.message:
-            await update.message.reply_text(fail_message, parse_mode='Markdown')
-        elif update.callback_query:
-            await update.callback_query.message.reply_text(fail_message, parse_mode='Markdown')
-        
-        logger.warning(f"❌ Video verification FAILED for user {user_id}")
+        return
     
+    # Send verification message
+    await send_video_verification_message(update, context)
+            
