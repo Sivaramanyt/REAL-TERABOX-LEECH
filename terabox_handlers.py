@@ -1,5 +1,5 @@
 """
-Terabox Handlers - WITH CONCURRENT PROCESSING
+Terabox Handlers - WITH CONCURRENT PROCESSING + FIXED VERIFICATION
 Multiple users can download/upload simultaneously
 """
 
@@ -8,11 +8,10 @@ import re
 import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
-
-from database import can_user_leech, increment_leech_attempts, get_user_data, needs_verification
-from handlers import send_verification_message
+from database import can_user_leech, increment_leech_attempts, get_user_data, needs_verification, update_user
 from auto_forward import forward_file_to_channel
 from config import FREE_LEECH_LIMIT, AUTO_FORWARD_ENABLED
+from verification import generate_verify_token, generate_monetized_verification_link
 
 # Import terabox modules
 from terabox_api import extract_terabox_data, format_size
@@ -37,50 +36,16 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
     try:
         # Step 1: Extract file information
         logger.info(f"📋 [User {user_id}] Extracting file info")
-        
         await status_msg.edit_text(
             "📋 **Fetching file information...**",
             parse_mode='Markdown'
         )
         
-        # ✅ FIXED: New API returns {"files": [...]}
-        result = extract_terabox_data(terabox_url)
-        files = result.get("files", [])
-        
-        if not files:
-            await status_msg.edit_text(
-                "❌ **No files found!**",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Process first file
-        file_info = files[0]
-        
-        # ✅ FIXED: Use correct keys from new API
-        filename = file_info.get('name', 'Terabox File')
-        size_readable = file_info.get('size', 'Unknown')
-        download_url = file_info.get('download_url')
-        
-        # Convert size to bytes for validation
-        file_size = 0
-        try:
-            # Try to parse size string like "18.08 MB"
-            size_parts = size_readable.split()
-            if len(size_parts) == 2:
-                size_value = float(size_parts[0])
-                size_unit = size_parts[1].upper()
-                
-                if size_unit == 'KB':
-                    file_size = int(size_value * 1024)
-                elif size_unit == 'MB':
-                    file_size = int(size_value * 1024 * 1024)
-                elif size_unit == 'GB':
-                    file_size = int(size_value * 1024 * 1024 * 1024)
-                elif size_unit == 'B':
-                    file_size = int(size_value)
-        except:
-            pass
+        file_info = extract_terabox_data(terabox_url)
+        filename = file_info['filename']
+        file_size = file_info['size']
+        size_readable = file_info['size_readable']
+        download_url = file_info['download_url']
         
         # Increment attempts
         increment_leech_attempts(user_id)
@@ -98,7 +63,7 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
             )
             return
         
-        # Check size (2GB limit)
+        # Check size
         max_size = 2 * 1024 * 1024 * 1024
         if file_size > max_size:
             await status_msg.edit_text(
@@ -151,28 +116,51 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
         except:
             pass
         
-        # Step 6: Send completion message
-        if not is_verified and used_attempts < FREE_LEECH_LIMIT:
-            remaining = FREE_LEECH_LIMIT - used_attempts
-            await update.message.reply_text(
-                f"✅ **File uploaded!**\n\n"
-                f"⏳ **Remaining:** {remaining}/{FREE_LEECH_LIMIT}",
-                parse_mode='Markdown'
-            )
-        elif used_attempts >= FREE_LEECH_LIMIT and not is_verified:
-            await update.message.reply_text("✅ **File uploaded!**", parse_mode='Markdown')
-            await send_verification_message(update, context)
-        else:
-            await update.message.reply_text(
-                "✅ **File uploaded!**\n♾️ **Status:** Premium",
-                parse_mode='Markdown'
-            )
+        # Step 6: Send completion message (FIXED VERSION)
+        try:
+            if not is_verified and used_attempts < FREE_LEECH_LIMIT:
+                remaining = FREE_LEECH_LIMIT - used_attempts
+                await update.message.reply_text(
+                    f"✅ **File uploaded!**\n\n"
+                    f"⏳ **Remaining free leeches:** {remaining}/{FREE_LEECH_LIMIT}",
+                    parse_mode='Markdown'
+                )
+            elif used_attempts >= FREE_LEECH_LIMIT and not is_verified:
+                # User hit limit - Generate and send verification link directly
+                token = generate_verify_token()
+                update_user(user_id, verify_token=token)
+                
+                # Create monetized verification link
+                bot_username = context.bot.username
+                verify_link = generate_monetized_verification_link(bot_username, token)
+                
+                await update.message.reply_text(
+                    f"✅ **File uploaded successfully!**\n\n"
+                    f"🔒 **Free leeches exhausted!**\n\n"
+                    f"📊 **Used:** {FREE_LEECH_LIMIT}/{FREE_LEECH_LIMIT}\n"
+                    f"🔐 **Verify to continue:**\n\n"
+                    f"🔗 {verify_link}\n\n"
+                    f"✨ **Unlimited access after verification!**",
+                    parse_mode='Markdown'
+                )
+            else:
+                # Verified premium user
+                await update.message.reply_text(
+                    "✅ **File uploaded!**\n♾️ **Status:** Verified User",
+                    parse_mode='Markdown'
+                )
+        except Exception as e:
+            logger.error(f"❌ [User {user_id}] Error sending completion message: {e}")
+            # File was already delivered, so just send simple message
+            try:
+                await update.message.reply_text("✅ **File uploaded!**", parse_mode='Markdown')
+            except:
+                pass
     
     except Exception as e:
         logger.error(f"❌ [User {user_id}] Error: {e}")
         if file_path:
             cleanup_file(file_path)
-        
         try:
             await status_msg.edit_text(
                 f"❌ **Error:**\n`{str(e)}`",
@@ -195,13 +183,24 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     match = TERABOX_PATTERN.search(message_text)
     terabox_url = match.group(0)
-    
     logger.info(f"📦 [User {user_id}] Terabox link detected")
     
     # Check permissions
     if not can_user_leech(user_id):
         if needs_verification(user_id):
-            await send_verification_message(update, context)
+            # Generate verification link directly
+            token = generate_verify_token()
+            update_user(user_id, verify_token=token)
+            bot_username = context.bot.username
+            verify_link = generate_monetized_verification_link(bot_username, token)
+            
+            await update.message.reply_text(
+                f"🔒 **Verification Required!**\n\n"
+                f"Click below to verify:\n\n"
+                f"🔗 {verify_link}\n\n"
+                f"✨ **Unlimited access after verification!**",
+                parse_mode='Markdown'
+            )
             return True
         else:
             await update.message.reply_text(
@@ -223,4 +222,4 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # Return immediately - don't wait for download to finish
     return True
-            
+        
