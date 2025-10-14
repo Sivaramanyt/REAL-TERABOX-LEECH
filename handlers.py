@@ -56,7 +56,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     success_message += f"📅 **Expires On:** {expiry_time}\n\n"
                 
                 success_message += "🚀 Start using the bot to leech files!"
-                
                 await update.message.reply_text(success_message, parse_mode='Markdown')
                 return
             else:
@@ -89,7 +88,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
 🤖 **Terabox Leech Bot Help**
@@ -103,17 +101,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /start - Start bot
 /help - Show this help
 /stats - View your stats
+/videos - Get random videos
 
 **Admin Commands:**
 /testforward - Test auto-forward
 /testapi - Test shortlink API
 /debugapi - Debug shortlink
-/resetverify - Reset verification
+/resetverify - Reset all verification
+/resetvideos - Reset video verification only
 
 Bot uses universal shortlinks for monetization!
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
-
 
 async def send_verification_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -150,14 +149,13 @@ async def send_verification_message(update: Update, context: ContextTypes.DEFAUL
                 [InlineKeyboardButton("📺 How to Verify?", url="https://t.me/Sr_Movie_Links/52")],
                 [InlineKeyboardButton("💬 ANY HELP", url="https://t.me/Siva9789")]
             ]
-            
             reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
         else:
             await update.message.reply_text("❌ Error generating verification link. Check API config.")
     else:
         await update.message.reply_text("❌ Error setting up verification. Try again.")
-
 
 async def leech_attempt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -198,12 +196,10 @@ async def leech_attempt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Error processing your request. Please try again.")
 
-
 async def verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Please use the verification link above to complete verification.")
-
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -232,6 +228,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_stats = get_bot_stats()
         bot_stats_text = f"""
 📊 **Bot Stats (Admin)**
+
 👥 Total Users: {bot_stats['total_users']}
 ✅ Verified Users: {bot_stats['verified_users']}
 📈 Total Attempts: {bot_stats['total_attempts']}
@@ -243,14 +240,12 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(user_stats, parse_mode='Markdown')
 
-
 async def test_forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != OWNER_ID:
         await update.message.reply_text("❌ This command is only for admins.")
         return
     await test_auto_forward(context, update.effective_chat.id)
-
 
 async def test_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -267,7 +262,6 @@ async def test_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ API Test Failed! Please check your API key and URL.")
 
-
 async def debug_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != OWNER_ID:
@@ -278,12 +272,12 @@ async def debug_shortlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = create_universal_shortlink("https://google.com")
     await update.message.reply_text(f"Debug result: {link if link else 'No shortlink created.'}")
 
-
 async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     IMPROVED RESET FUNCTION - Resets BOTH video and Terabox leech verification
     """
     user_id = update.effective_user.id
+    
     if user_id != OWNER_ID:
         await update.message.reply_text("❌ Only the bot owner can use this command.")
         return
@@ -294,17 +288,23 @@ async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             target_id = user_id
         
-        # RESET BOTH VIDEO AND TERABOX LEECH VERIFICATION
+        # ✅ FIXED: RESET BOTH VIDEO AND TERABOX LEECH VERIFICATION (using correct field names)
         result = users_collection.update_one(
             {"user_id": target_id},
             {
                 "$set": {
+                    # Leech verification
                     "is_verified": False,
                     "leech_attempts": 0,
-                    "video_verified": False,
-                    "video_attempts": 0,
                     "verify_token": None,
-                    "verify_expiry": None
+                    "verify_expiry": None,
+                    "token_expiry": None,
+                    # Video verification (correct field names)
+                    "is_video_verified": False,  # ✅ FIXED: was "video_verified"
+                    "video_attempts": 0,
+                    "video_verify_token": None,
+                    "video_token_expiry": None,
+                    "video_verify_expiry": None
                 }
             }
         )
@@ -327,4 +327,58 @@ async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
+
+# ✅ NEW FUNCTION: Reset only video verification
+async def reset_video_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Reset ONLY video verification for a user (Admin only)
+    Usage: /resetvideos or /resetvideos <user_id>
+    """
+    user_id = update.effective_user.id
     
+    if user_id != OWNER_ID:
+        await update.message.reply_text("❌ Admin command only!")
+        return
+    
+    # Get user_id from command or use self
+    if context.args and len(context.args) > 0:
+        try:
+            target_user_id = int(context.args[0])
+        except:
+            await update.message.reply_text("❌ Invalid user ID!")
+            return
+    else:
+        target_user_id = user_id
+    
+    try:
+        result = users_collection.update_one(
+            {"user_id": target_user_id},
+            {
+                "$set": {
+                    "video_attempts": 0,
+                    "is_video_verified": False,
+                    "video_verify_token": None,
+                    "video_token_expiry": None,
+                    "video_verify_expiry": None
+                }
+            }
+        )
+        
+        if result.modified_count > 0:
+            await update.message.reply_text(
+                f"✅ **VIDEO RESET COMPLETE** for user {target_user_id}\n\n"
+                f"🔄 **Reset Items:**\n"
+                f"• Video Verification\n"
+                f"• Video Attempts\n"
+                f"• Verification Tokens\n\n"
+                f"User will now need to verify again for videos after 3 attempts!",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                f"⚠️ User {target_user_id} not found or already reset!",
+                parse_mode='Markdown'
+            )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+                
