@@ -1,5 +1,6 @@
 """
-Random Videos Feature - SEPARATE verification from Terabox leech
+Simple Random Videos - NO DATABASE NEEDED
+Uses hardcoded file_ids with verification system
 """
 import logging
 import random as rand
@@ -11,11 +12,10 @@ from config import BOT_USERNAME, VERIFY_TOKEN_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
-# Video settings
+# Settings
 FREE_VIDEO_LIMIT = 3
-VIDEO_STORAGE_CHANNEL = -1002819858433
 
-# Video collections
+# 🎬 YOUR VIDEO FILE IDs (NO DATABASE NEEDED!)
 RANDOM_VIDEOS = [
     'BAACAgUAAxkBAAIBEmcNDdQTt8sF4MvFKqkjnU8Pnh-cAAKHEgAC0rgoVXJC8bPAREqWNgQ',
     'BAACAgUAAxkBAAIBE2cNDdiR4hW7gPHFkROYCXAAAQpM3AACVRQAAv3nIFUXK-oNPHxg7jYE',
@@ -35,19 +35,19 @@ HORROR_VIDEOS = [
 ]
 
 async def handle_videos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Main /videos command handler"""
+    """Handle /videos command"""
     user_id = update.effective_user.id
     
     # Get user data
     user_data = get_user_data(user_id)
     if not user_data:
-        await update.message.reply_text("❌ Database error. Try /start first")
+        await update.message.reply_text("❌ Error. Try /start first.")
         return
     
     video_attempts = user_data.get("video_attempts", 0)
     video_verified = user_data.get("video_verified", False)
     
-    # Check if needs verification
+    # Check verification
     if not video_verified and video_attempts >= FREE_VIDEO_LIMIT:
         await send_video_verification_message(update, context)
         return
@@ -56,21 +56,12 @@ async def handle_videos_command(update: Update, context: ContextTypes.DEFAULT_TY
     await send_random_video(update, context, video_attempts, video_verified)
 
 async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE, video_attempts, video_verified):
-    """Send random video with proper tracking"""
+    """Send random video"""
     user_id = update.effective_user.id
     
-    # Increment attempts if not verified
-    if not video_verified:
-        users_collection.update_one(
-            {"user_id": user_id},
-            {"$inc": {"video_attempts": 1}}
-        )
-        video_attempts += 1
-    
-    # Choose random category
+    # Choose category
     category = rand.choice(['random', 'divine', 'horror'])
     
-    # Select video from category
     if category == 'random':
         video_file_id = rand.choice(RANDOM_VIDEOS)
         caption = "🎬 Random Video"
@@ -83,34 +74,41 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     
     try:
         # Send video
-        await context.bot.send_video(
-            chat_id=user_id,
+        await update.message.reply_video(
             video=video_file_id,
             caption=caption
         )
-    except Exception as e:
-        logger.error(f"Error sending video: {e}")
-        await update.message.reply_text("❌ Error sending video. Try again later.")
-        return
-    
-    # Show status
-    if video_verified:
-        status_msg = "♾️ **Status:** Video Verified (Unlimited videos)"
-    else:
-        remaining = FREE_VIDEO_LIMIT - video_attempts
-        status_msg = f"⏳ **Remaining:** {remaining}/{FREE_VIDEO_LIMIT} free videos"
         
-        if remaining == 0:
-            status_msg += "\n\n🔒 **Next video requires verification!**"
-    
-    await update.message.reply_text(status_msg, parse_mode='Markdown')
+        # Increment attempts if not verified
+        if not video_verified:
+            users_collection.update_one(
+                {"user_id": user_id},
+                {"$inc": {"video_attempts": 1}}
+            )
+            video_attempts += 1
+        
+        # Show status
+        if video_verified:
+            status = "♾️ **Status:** Unlimited videos"
+        else:
+            remaining = FREE_VIDEO_LIMIT - video_attempts
+            status = f"⏳ **Remaining:** {remaining}/{FREE_VIDEO_LIMIT} free videos"
+            if remaining == 0:
+                status += "\n\n🔒 **Next video requires verification!**"
+        
+        await update.message.reply_text(status, parse_mode='Markdown')
+        
+        logger.info(f"✅ Sent {category} video to {user_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error: {e}")
+        await update.message.reply_text("❌ Error sending video. Try again.")
 
 async def send_video_verification_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send verification message for videos"""
+    """Send verification message"""
     user_id = update.effective_user.id
     token = generate_verify_token()
     
-    # Store video verification token
     users_collection.update_one(
         {"user_id": user_id},
         {"$set": {"video_verify_token": token}}
@@ -119,10 +117,9 @@ async def send_video_verification_message(update: Update, context: ContextTypes.
     verify_link = generate_monetized_verification_link(BOT_USERNAME, token)
     
     if not verify_link:
-        await update.message.reply_text("❌ Error generating verification link")
+        await update.message.reply_text("❌ Error generating link")
         return
     
-    # Calculate validity
     validity_hours = VERIFY_TOKEN_TIMEOUT / 3600
     if validity_hours >= 24:
         validity_str = f"{int(validity_hours / 24)} days"
@@ -148,4 +145,4 @@ async def send_video_verification_message(update: Update, context: ContextTypes.
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
-                            
+    
