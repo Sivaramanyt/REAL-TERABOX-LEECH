@@ -30,7 +30,6 @@ async def auto_save_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Check if message is from storage channel
     from config import VIDEO_STORAGE_CHANNEL
-    
     if message.chat.id != VIDEO_STORAGE_CHANNEL:
         return
     
@@ -63,7 +62,7 @@ async def auto_save_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not videos_collection.find_one({'file_id': file_id}):
             videos_collection.insert_one(video_data)
             logger.info(f"✅ Auto-saved video: {file_name}")
-        
+            
     except Exception as e:
         logger.error(f"❌ Error auto-saving video: {e}")
 
@@ -84,6 +83,7 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Get or CREATE user data (auto-register if needed)
         user_data = get_user_data(user_id)
+        
         if not user_data:
             # User doesn't exist - create them automatically
             user_data = {
@@ -192,7 +192,7 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "♾️ **Status:** Video Verified (Unlimited videos)",
                 parse_mode='Markdown'
             )
-        
+            
     except Exception as e:
         logger.error(f"❌ Error sending random video: {e}")
         await update.message.reply_text(
@@ -204,7 +204,7 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
     """
     Handle "Next Video" button click
     WITH SEPARATE VIDEO VERIFICATION CHECK
-    FIXED: Increments attempts AFTER successful send
+    FIXED: Gets FRESH user data after incrementing attempts
     """
     query = update.callback_query
     await query.answer()
@@ -219,6 +219,7 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
     try:
         # Get or CREATE user data (auto-register if needed)
         user_data = get_user_data(user_id)
+        
         if not user_data:
             # User doesn't exist - create them automatically
             user_data = {
@@ -232,20 +233,20 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
             }
             users_collection.insert_one(user_data)
             logger.info(f"✅ Auto-registered new user {user_id} via video callback")
+            user_data = get_user_data(user_id)  # ✅ Get fresh data after insert
         
         video_attempts = user_data.get("video_attempts", 0)
         is_video_verified = user_data.get("is_video_verified", False)
         
-        # ✅ Check if user can access videos BEFORE sending (don't increment yet!)
+        # ✅ FIXED: Check verification BEFORE sending (using current attempts)
         if not is_video_verified and video_attempts >= FREE_VIDEO_LIMIT:
             await query.message.reply_text(
                 "⏸️ **Free videos limit reached!**\n\n"
                 "Please complete **video verification** to continue watching.",
                 parse_mode='Markdown'
             )
-            # Create fake update for verification
-            fake_update = Update(update_id=0, message=query.message)
-            await send_video_verification_message(fake_update, context)
+            # Send verification message
+            await send_video_verification_message(update, context)
             return
         
         # Get total count
@@ -282,7 +283,6 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
         
         # Delete old video and send new one
         await query.message.delete()
-        
         await context.bot.send_video(
             chat_id=query.message.chat_id,
             video=random_video['file_id'],
@@ -298,12 +298,15 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
         
         # ✅ NOW increment attempts AFTER successful send
         increment_video_attempts(user_id)
-        user_data = get_user_data(user_id)  # Get fresh data
+        
+        # ✅ FIXED: Get FRESH user data AFTER incrementing
+        user_data = get_user_data(user_id)
         used_attempts = user_data.get("video_attempts", 0)
+        is_video_verified = user_data.get("is_video_verified", False)  # ✅ Check fresh status
         
         logger.info(f"✅ Sent next video to user {user_id} (Video attempt #{used_attempts})")
         
-        # Show remaining or verification
+        # ✅ FIXED: Show remaining or verification using FRESH data
         if not is_video_verified and used_attempts < FREE_VIDEO_LIMIT:
             remaining = FREE_VIDEO_LIMIT - used_attempts
             await context.bot.send_message(
@@ -312,12 +315,14 @@ async def handle_random_video_callback(update: Update, context: ContextTypes.DEF
                 parse_mode='Markdown'
             )
         elif used_attempts >= FREE_VIDEO_LIMIT and not is_video_verified:
+            # ✅ User just hit the limit - send verification NOW
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text="⏸️ **Free limit reached!** Complete video verification for unlimited videos.",
+                text="⏸️ **Free limit reached!** Complete video verification below:",
                 parse_mode='Markdown'
             )
-        
+            await send_video_verification_message(update, context)
+            
     except Exception as e:
         logger.error(f"❌ Error in callback: {e}")
         await query.message.reply_text(
@@ -338,7 +343,6 @@ async def video_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     total_sent_cursor = list(videos_collection.aggregate([
         {'$group': {'_id': None, 'total': {'$sum': '$sent_count'}}}
     ]))
-    
     sent_count = total_sent_cursor[0]['total'] if total_sent_cursor else 0
     
     # Get most popular video
@@ -358,4 +362,4 @@ async def video_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     
     await update.message.reply_text(response, parse_mode='Markdown')
-    
+            
