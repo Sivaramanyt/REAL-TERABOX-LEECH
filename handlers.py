@@ -5,7 +5,7 @@ from telegram.ext import ContextTypes
 from database import (
     get_user_data, increment_leech_attempts, can_user_leech,
     needs_verification, set_verification_token, verify_user, get_bot_stats,
-    users_collection, verify_video_user  # ✅ Added verify_video_user
+    users_collection, verify_video_user
 )
 from verification import (
     generate_verify_token, generate_monetized_verification_link,
@@ -24,16 +24,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     
+    # ✅ DEBUG: Log ALL start commands
+    logger.info(f"========== START COMMAND RECEIVED ==========")
+    logger.info(f"User ID: {user_id}")
+    logger.info(f"Arguments: {context.args}")
+    
     # Check if user came from verification link
     if context.args:
-        token = extract_token_from_start(context.args[0])
-        if token:
+        full_token = extract_token_from_start(context.args[0])
+        logger.info(f"Extracted token: {full_token}")
+        
+        if full_token:
             # ✅ FIXED: Check if this is a VIDEO verification token
-            if token.startswith("video_"):
+            if full_token.startswith("video_"):
+                logger.info(f"✅ VIDEO VERIFICATION TOKEN DETECTED: {full_token}")
                 # VIDEO VERIFICATION
+                from database import verify_video_user
+                
                 # ✅ FIXED: Remove "video_" prefix and pass both user_id and token
-                actual_token = token.replace("video_", "", 1)  # Remove the prefix
+                actual_token = full_token.replace("video_", "", 1)  # Remove the prefix
+                logger.info(f"Token after removing prefix: {actual_token}")
+                logger.info(f"Calling verify_video_user({user_id}, {actual_token})")
+                
                 verified = verify_video_user(user_id, actual_token)  # Pass both parameters
+                logger.info(f"Verification result: {verified}")
                 
                 if verified:
                     # Calculate validity time for videos
@@ -61,9 +75,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         success_message += f"📅 **Expires On:** {expiry_time}\n\n"
                     
                     success_message += "🎬 Use /videos to watch unlimited random videos!"
+                    logger.info(f"Sending success message to user {user_id}")
                     await update.message.reply_text(success_message, parse_mode='Markdown')
                     return
                 else:
+                    logger.warning(f"❌ Video verification FAILED for user {user_id}")
                     await update.message.reply_text(
                         "❌ Video verification failed or expired. Please try again.",
                         parse_mode='Markdown'
@@ -71,12 +87,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
             else:
                 # LEECH VERIFICATION (existing code)
-                verified_user_id = verify_user(token)
+                logger.info(f"LEECH VERIFICATION TOKEN: {full_token}")
+                verified_user_id = verify_user(full_token)
                 if verified_user_id:
-                    # Calculate validity time automatically
                     validity_hours = VERIFY_TOKEN_TIMEOUT / 3600
                     
-                    # Format validity time
                     if validity_hours >= 24:
                         validity_str = f"{int(validity_hours / 24)} days"
                     elif validity_hours >= 1:
@@ -84,7 +99,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         validity_str = f"{int(VERIFY_TOKEN_TIMEOUT / 60)} minutes"
                     
-                    # Get user data to show expiry time
                     user_data = get_user_data(verified_user_id)
                     verify_expiry = user_data.get("verify_expiry")
                     
@@ -109,6 +123,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
     
     # Normal start message
+    logger.info(f"No verification token - showing normal start message")
     user_data = get_user_data(user_id)
     if not user_data:
         await update.message.reply_text("❌ Database error. Please try again later.")
@@ -422,4 +437,4 @@ async def reset_video_verify(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
-                        
+        
