@@ -5,7 +5,7 @@ from telegram.ext import ContextTypes
 from database import (
     get_user_data, increment_leech_attempts, can_user_leech,
     needs_verification, set_verification_token, verify_user, get_bot_stats,
-    users_collection
+    users_collection, verify_video_user  # ✅ Added verify_video_user
 )
 from verification import (
     generate_verify_token, generate_monetized_verification_link,
@@ -15,7 +15,7 @@ from auto_forward import forward_file_to_channel, test_auto_forward
 from config import (
     START_MESSAGE, VERIFICATION_MESSAGE, VERIFY_TOKEN_TIMEOUT,
     FREE_LEECH_LIMIT, VERIFY_TUTORIAL, BOT_USERNAME, OWNER_ID,
-    AUTO_FORWARD_ENABLED, BACKUP_CHANNEL_ID, VIDEO_VERIFY_TOKEN_TIMEOUT  # ✅ NEW IMPORT
+    AUTO_FORWARD_ENABLED, BACKUP_CHANNEL_ID, VIDEO_VERIFY_TOKEN_TIMEOUT
 )
 
 logger = logging.getLogger(__name__)
@@ -28,13 +28,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         token = extract_token_from_start(context.args[0])
         if token:
-            # ✅ NEW: Check if this is a VIDEO verification token
+            # ✅ FIXED: Check if this is a VIDEO verification token
             if token.startswith("video_"):
                 # VIDEO VERIFICATION
-                from video_verification import verify_video_user
+                # ✅ FIXED: Remove "video_" prefix and pass both user_id and token
+                actual_token = token.replace("video_", "", 1)  # Remove the prefix
+                verified = verify_video_user(user_id, actual_token)  # Pass both parameters
                 
-                verified_user_id = verify_video_user(token)
-                if verified_user_id:
+                if verified:
                     # Calculate validity time for videos
                     validity_hours = VIDEO_VERIFY_TOKEN_TIMEOUT / 3600
                     
@@ -46,7 +47,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         validity_str = f"{int(VIDEO_VERIFY_TOKEN_TIMEOUT / 60)} minutes"
                     
                     # Get user data to show expiry
-                    user_data = get_user_data(verified_user_id)
+                    user_data = get_user_data(user_id)
                     video_verify_expiry = user_data.get("video_verify_expiry")
                     
                     success_message = (
@@ -330,7 +331,6 @@ async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             target_id = user_id
         
-        # ✅ FIXED: RESET BOTH VIDEO AND TERABOX LEECH VERIFICATION (using correct field names)
         result = users_collection.update_one(
             {"user_id": target_id},
             {
@@ -370,7 +370,6 @@ async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
 
-# ✅ NEW FUNCTION: Reset only video verification
 async def reset_video_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Reset ONLY video verification for a user (Admin only)
@@ -423,4 +422,4 @@ async def reset_video_verify(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
-        
+                        
