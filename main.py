@@ -10,7 +10,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from config import *
 from handlers import (
     start, help_command, leech_attempt, verify_callback,
-    stats, test_forward, test_shortlink, reset_verify
+    stats, test_forward, test_shortlink, reset_verify,
+    reset_video_verify  # ✅ NEW: Added video reset function
 )
 from database import init_db
 from health_server import run_health_server
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # 🎬 NEW: Import random video handlers (BOTH command and callback)
 try:
-    from random_videos import send_random_video, handle_random_video_callback  # ✅ FIXED: Added callback
+    from random_videos import send_random_video, handle_random_video_callback
     RANDOM_VIDEOS_ENABLED = True
 except ImportError:
     logger.warning("⚠️ random_videos.py not found - Random videos feature disabled")
@@ -108,13 +109,14 @@ def main():
         # 🎬 NEW: Random Videos handlers (BOTH command and callback - MUST BE BEFORE GENERAL CALLBACK)
         if RANDOM_VIDEOS_ENABLED:
             application.add_handler(CommandHandler("videos", send_random_video))
-            application.add_handler(CallbackQueryHandler(handle_random_video_callback, pattern="^random_video$"))  # ✅ FIXED
+            application.add_handler(CallbackQueryHandler(handle_random_video_callback, pattern="^random_video$"))
             logger.info("✅ Random Videos command and callback handlers registered (SEPARATE verification)")
         
         # Admin commands
         application.add_handler(CommandHandler("testforward", test_forward))
         application.add_handler(CommandHandler("testapi", test_shortlink))
         application.add_handler(CommandHandler("resetverify", reset_verify))
+        application.add_handler(CommandHandler("resetvideos", reset_video_verify))  # ✅ NEW
         
         # Message router for Terabox links
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
@@ -132,4 +134,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
+        
