@@ -31,6 +31,7 @@ def create_universal_shortlink(original_url):
     api_endpoint = SHORTLINK_URL
     if not api_endpoint.startswith('http'):
         api_endpoint = f"https://{api_endpoint}"
+    
     if not api_endpoint.endswith('/api'):
         if not api_endpoint.endswith('/'):
             api_endpoint += '/api'
@@ -41,25 +42,18 @@ def create_universal_shortlink(original_url):
     api_formats = [
         # Format 1: GET with api & url parameters
         {'method': 'GET', 'params': {'api': SHORTLINK_API, 'url': original_url}},
-        
-        # Format 2: POST with api & url parameters  
+        # Format 2: POST with api & url parameters
         {'method': 'POST', 'data': {'api': SHORTLINK_API, 'url': original_url}},
-        
         # Format 3: GET with key & url parameters
         {'method': 'GET', 'params': {'key': SHORTLINK_API, 'url': original_url}},
-        
         # Format 4: GET with token & link parameters
         {'method': 'GET', 'params': {'token': SHORTLINK_API, 'link': original_url}},
-        
         # Format 5: JSON POST with Authorization header
         {'method': 'POST', 'json': {'url': original_url}, 'headers': {'Authorization': f'Bearer {SHORTLINK_API}'}},
-        
         # Format 6: Form POST with api_key
         {'method': 'POST', 'data': {'api_key': SHORTLINK_API, 'long_url': original_url}},
-        
         # Format 7: GET with apikey parameter
         {'method': 'GET', 'params': {'apikey': SHORTLINK_API, 'originalUrl': original_url}},
-        
         # Format 8: Custom format for specific services
         {'method': 'GET', 'params': {'api': SHORTLINK_API, 'url': original_url, 'alias': generate_verify_token(6)}},
     ]
@@ -72,7 +66,7 @@ def create_universal_shortlink(original_url):
             # Make request based on format
             if format_config['method'] == 'GET':
                 response = requests.get(
-                    api_endpoint, 
+                    api_endpoint,
                     params=format_config.get('params'),
                     headers=format_config.get('headers', {}),
                     timeout=15
@@ -81,7 +75,7 @@ def create_universal_shortlink(original_url):
                 response = requests.post(
                     api_endpoint,
                     data=format_config.get('data'),
-                    json=format_config.get('json'), 
+                    json=format_config.get('json'),
                     headers=format_config.get('headers', {}),
                     timeout=15
                 )
@@ -107,7 +101,6 @@ def create_universal_shortlink(original_url):
                             # Extract URL if it's nested in data object
                             if isinstance(shortlink, dict) and 'url' in shortlink:
                                 shortlink = shortlink['url']
-                            
                             # Validate it's a proper URL
                             if isinstance(shortlink, str) and shortlink.startswith('http'):
                                 logger.info(f"✅ SUCCESS! Shortlink created: {shortlink}")
@@ -139,10 +132,8 @@ def test_shortlink_api():
     """Test your shortlink API with detailed debugging"""
     try:
         logger.info("🧪 Testing shortlink API...")
-        
         # Test with a simple URL
         test_url = "https://google.com"
-        
         result = create_universal_shortlink(test_url)
         
         if result and result.startswith('http') and result != test_url:
@@ -151,7 +142,6 @@ def test_shortlink_api():
         else:
             logger.error(f"❌ API TEST FAILED! Result: {result}")
             return False
-            
     except Exception as e:
         logger.error(f"❌ API test error: {e}")
         return False
@@ -164,7 +154,6 @@ def generate_monetized_verification_link(bot_username, token):
     try:
         # Create Telegram verification URL
         telegram_url = f"https://t.me/{bot_username}?start=verify_{token}"
-        
         logger.info(f"🎯 Creating MONETIZED shortlink for verification...")
         logger.info(f"📱 Original Telegram URL: {telegram_url}")
         
@@ -178,17 +167,30 @@ def generate_monetized_verification_link(bot_username, token):
             logger.error(f"❌ SHORTLINK CREATION FAILED! Using direct Telegram link (NO MONEY EARNED)")
             logger.error(f"🔧 Check your SHORTLINK_API and SHORTLINK_URL settings!")
             return telegram_url
-            
     except Exception as e:
         logger.error(f"❌ Error creating monetized link: {e}")
         return f"https://t.me/{bot_username}?start=verify_{token}"
 
 def extract_token_from_start(text):
-    """Extract verification token from /start command"""
+    """
+    Extract verification token from /start command
+    ✅ FIXED: Handles BOTH verify_ (leech) and video_ (video) prefixes
+    """
     try:
+        if not text:
+            return None
+        
+        # For leech verification - return with verify_ prefix
         if text.startswith("verify_"):
-            return text.split("verify_")[1]
+            return text  # Return full token with prefix
+        
+        # For video verification - return with video_ prefix  
+        elif text.startswith("video_"):
+            return text  # Return full token with prefix
+        
+        # Unknown format - return None
         return None
+        
     except Exception as e:
         logger.error(f"Error extracting token: {e}")
         return None
