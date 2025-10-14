@@ -1,6 +1,7 @@
 """
 Terabox Leech Bot with Universal Shortlink Verification & Auto-Forward & Random Videos
 """
+
 import logging
 import asyncio
 import sys
@@ -17,14 +18,7 @@ from health_server import run_health_server
 # 🎯 IMPORT: Terabox handler
 from terabox_handlers import handle_terabox_link
 
-# 🎬 NEW: Import random video handlers
-try:
-    from random_videos import handle_videos_command
-    RANDOM_VIDEOS_ENABLED = True
-except ImportError:
-    logger.warning("⚠️ random_videos.py not found - Random videos feature disabled")
-    RANDOM_VIDEOS_ENABLED = False
-
+# ✅ CONFIGURE LOGGING FIRST (BEFORE ANY TRY-EXCEPT BLOCKS)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
@@ -32,6 +26,14 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# 🎬 NEW: Import random video handlers
+try:
+    from random_videos import send_random_video  # ✅ FIXED: Correct function name
+    RANDOM_VIDEOS_ENABLED = True
+except ImportError:
+    logger.warning("⚠️ random_videos.py not found - Random videos feature disabled")
+    RANDOM_VIDEOS_ENABLED = False
 
 def display_startup_info():
     startup_info = f"""
@@ -85,6 +87,7 @@ async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     try:
         display_startup_info()
+        
         logger.info("🏥 Starting health server...")
         run_health_server()
         
@@ -104,7 +107,7 @@ def main():
         
         # 🎬 NEW: Random Videos command (SEPARATE verification)
         if RANDOM_VIDEOS_ENABLED:
-            application.add_handler(CommandHandler("videos", handle_videos_command))
+            application.add_handler(CommandHandler("videos", send_random_video))  # ✅ FIXED
             logger.info("✅ Random Videos handler registered (SEPARATE verification)")
         
         # Admin commands
@@ -121,10 +124,11 @@ def main():
         logger.info("🚀 Bot started successfully with Terabox Leech, Random Videos (SEPARATE verification), Universal Shortlinks!")
         
         application.run_polling(allowed_updates=["message", "callback_query"])
+        
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
         sys.exit(1)
 
 if __name__ == '__main__':
     main()
-        
+            
