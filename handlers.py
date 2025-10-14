@@ -31,9 +31,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Check if it's a VIDEO verification token
         if token_arg.startswith('video_'):
-            # Import video verification handler
             from video_verification import handle_video_verification_callback
-            # Remove the "video_" prefix to get actual token
             actual_token = token_arg[6:]  # Remove first 6 characters "video_"
             logger.info(f"Processing video verification for user {user_id}")
             await handle_video_verification_callback(update, context, actual_token)
@@ -63,11 +61,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Register user in database
     user_data = get_user_data(user_id)
     
-    # Send welcome message
-    welcome_text = START_MESSAGE.format(
-        user_name=user.first_name,
-        user_id=user_id
-    )
+    # Prepare welcome message with proper variables - FIXED
+    try:
+        # Try with all possible format variables
+        welcome_text = START_MESSAGE.format(
+            mention=user.mention_html(),
+            user_name=user.first_name,
+            user_id=user_id,
+            used_attempts=user_data.get("leech_attempts", 0),
+            verification_status="✅ Verified" if user_data.get("is_verified") else "⏳ Not verified"
+        )
+        parse_mode = 'HTML'  # Use HTML for mention_html()
+    except KeyError as e:
+        # Fallback: simple message without formatting
+        logger.warning(f"START_MESSAGE format error: {e}. Using fallback message.")
+        welcome_text = f"👋 Welcome {user.first_name}!\n\n🤖 **Terabox Leech Bot**\n\n📥 Send Terabox links to download\n🎬 Use /videos for random videos\n\n✨ 3 free attempts for each feature!"
+        parse_mode = 'Markdown'
     
     keyboard = [
         [InlineKeyboardButton("📚 Help", callback_data="help")],
@@ -78,7 +87,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         welcome_text,
-        parse_mode='Markdown',
+        parse_mode=parse_mode,
         reply_markup=reply_markup
     )
 
@@ -178,9 +187,13 @@ async def verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     if query.data == "help":
-        await help_command(query, context)
+        # Create a fake update for help command
+        fake_update = Update(update_id=0, message=query.message)
+        await help_command(fake_update, context)
     elif query.data == "stats":
-        await stats(query, context)
+        # Create a fake update for stats
+        fake_update = Update(update_id=0, message=query.message)
+        await stats(fake_update, context)
     elif query.data == "get_videos":
         # Import and call video function
         from random_videos import send_random_video
@@ -269,4 +282,4 @@ async def reset_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
-    
+                                    
