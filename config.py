@@ -17,23 +17,24 @@ MONGODB_URL = os.getenv("MONGODB_URL")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "terabox_bot")
 
 # AUTO-FORWARD CONFIGURATION
-BACKUP_CHANNEL_ID = int(os.getenv("BACKUP_CHANNEL_ID", "0"))  # Your channel ID
+BACKUP_CHANNEL_ID = int(os.getenv("BACKUP_CHANNEL_ID", "0")) # Your channel ID
 AUTO_FORWARD_ENABLED = os.getenv("AUTO_FORWARD_ENABLED", "True").lower() == "true"
 
 # UNIVERSAL SHORTLINK CONFIGURATION 💰
-SHORTLINK_API = os.getenv("SHORTLINK_API")  # Your API key
-SHORTLINK_URL = os.getenv("SHORTLINK_URL")  # Your service URL
+SHORTLINK_API = os.getenv("SHORTLINK_API") # Your API key
+SHORTLINK_URL = os.getenv("SHORTLINK_URL") # Your service URL
 
 # Verification Configuration
 VERIFY_TUTORIAL = os.getenv("VERIFY_TUTORIAL", "https://youtube.com/watch?v=example")
 
 # Bot Settings
 FREE_LEECH_LIMIT = int(os.getenv("FREE_LEECH_LIMIT", "3"))
-VERIFY_TOKEN_TIMEOUT = int(os.getenv("VERIFY_TOKEN_TIMEOUT", "3600"))  # 1 hour
+VERIFY_TOKEN_TIMEOUT = int(os.getenv("VERIFY_TOKEN_TIMEOUT", "3600")) # 1 hour
 
 # ========== NEW: VIDEO FEATURE CONFIGURATION ==========
-VIDEO_STORAGE_CHANNEL = int(os.getenv("VIDEO_STORAGE_CHANNEL", "0"))  # Your private channel ID for videos
-FREE_VIDEO_LIMIT = int(os.getenv("FREE_VIDEO_LIMIT", "3"))  # Same as leech limit
+VIDEO_STORAGE_CHANNEL = int(os.getenv("VIDEO_STORAGE_CHANNEL", "0")) # Your private channel ID for videos
+FREE_VIDEO_LIMIT = int(os.getenv("FREE_VIDEO_LIMIT", "3")) # Same as leech limit
+VIDEO_VERIFY_TOKEN_TIMEOUT = int(os.getenv("VIDEO_VERIFY_TOKEN_TIMEOUT", "86400")) # ✅ NEW: 24 hours for video verification
 
 # Messages
 START_MESSAGE = """
@@ -107,6 +108,7 @@ FORWARD_CAPTION_TEMPLATE = """
 👤 **User:** {user_name} (@{username})
 🆔 **User ID:** {user_id}
 📅 **Date:** {date}
+
 🔗 **Original Link:** {original_link}
 
 📊 **User Stats:** {total_attempts} total attempts
@@ -121,16 +123,12 @@ FORWARD_CAPTION_TEMPLATE = """
 # Validation
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is required")
-
 if not MONGODB_URL:
     raise ValueError("MONGODB_URL is required")
-
 if not SHORTLINK_API:
     raise ValueError("SHORTLINK_API is required - Get from your shortlink service")
-
 if not SHORTLINK_URL:
     raise ValueError("SHORTLINK_URL is required - Get from your shortlink service")
-
 if AUTO_FORWARD_ENABLED and not BACKUP_CHANNEL_ID:
     raise ValueError("BACKUP_CHANNEL_ID is required when auto-forward is enabled")
 
