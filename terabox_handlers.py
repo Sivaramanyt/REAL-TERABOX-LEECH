@@ -42,11 +42,11 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
         
         file_info = extract_terabox_data(terabox_url)
         
-        # ✅ FIXED: Use 'file_name' instead of 'filename' to match API response
-        filename = file_info.get('file_name') or file_info.get('filename', 'Unknown')
-        file_size = file_info.get('size', 0)
-        size_readable = file_info.get('size_readable', 'Unknown')
-        download_url = file_info.get('download_url', '')
+        # ✅ FIXED: Match actual API response format from terabox_api.py
+        filename = file_info.get('file_name', 'Unknown')  # API uses 'file_name'
+        file_size = file_info.get('sizebytes', 0)  # API uses 'sizebytes' for bytes
+        size_readable = file_info.get('size', 'Unknown')  # API uses 'size' for readable string
+        download_url = file_info.get('direct_link', '')  # API uses 'direct_link'
         
         # Increment attempts
         increment_leech_attempts(user_id)
@@ -64,7 +64,7 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
             )
             return
         
-        # Check size
+        # Check size (2GB limit)
         max_size = 2 * 1024 * 1024 * 1024
         if file_size > max_size:
             await status_msg.edit_text(
@@ -225,4 +225,4 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # Return immediately - don't wait for download to finish
     return True
-        
+    
