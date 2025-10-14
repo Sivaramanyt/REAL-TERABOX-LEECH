@@ -27,9 +27,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# 🎬 NEW: Import random video handlers
+# 🎬 NEW: Import random video handlers (BOTH command and callback)
 try:
-    from random_videos import send_random_video  # ✅ FIXED: Correct function name
+    from random_videos import send_random_video, handle_random_video_callback  # ✅ FIXED: Added callback
     RANDOM_VIDEOS_ENABLED = True
 except ImportError:
     logger.warning("⚠️ random_videos.py not found - Random videos feature disabled")
@@ -105,10 +105,11 @@ def main():
         application.add_handler(CommandHandler("leech", leech_attempt))
         application.add_handler(CommandHandler("stats", stats))
         
-        # 🎬 NEW: Random Videos command (SEPARATE verification)
+        # 🎬 NEW: Random Videos handlers (BOTH command and callback - MUST BE BEFORE GENERAL CALLBACK)
         if RANDOM_VIDEOS_ENABLED:
-            application.add_handler(CommandHandler("videos", send_random_video))  # ✅ FIXED
-            logger.info("✅ Random Videos handler registered (SEPARATE verification)")
+            application.add_handler(CommandHandler("videos", send_random_video))
+            application.add_handler(CallbackQueryHandler(handle_random_video_callback, pattern="^random_video$"))  # ✅ FIXED
+            logger.info("✅ Random Videos command and callback handlers registered (SEPARATE verification)")
         
         # Admin commands
         application.add_handler(CommandHandler("testforward", test_forward))
@@ -118,7 +119,7 @@ def main():
         # Message router for Terabox links
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
         
-        # Callback query handler
+        # General callback query handler (MUST BE LAST)
         application.add_handler(CallbackQueryHandler(verify_callback))
         
         logger.info("🚀 Bot started successfully with Terabox Leech, Random Videos (SEPARATE verification), Universal Shortlinks!")
@@ -131,4 +132,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-            
+    
