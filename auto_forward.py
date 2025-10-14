@@ -31,7 +31,13 @@ async def forward_file_to_channel(context, user, file_message):
         
         # ✅ Step 2: Save to File Store database (silently, no user notification)
         try:
-            from database import file_store_collection
+            # Import database connection
+            import pymongo
+            from config import MONGODB_URL, DATABASE_NAME
+            
+            client = pymongo.MongoClient(MONGODB_URL)
+            db = client[DATABASE_NAME]
+            file_store_collection = db.file_store
             
             # Determine file type and ID
             file_type = None
@@ -56,7 +62,7 @@ async def forward_file_to_channel(context, user, file_message):
                 file_name = "Photo"
             
             if file_id and file_type:
-                # Save to file store collection (same format as processor.py)
+                # Save to file store collection
                 file_store_collection.insert_one({
                     "channel_post_id": forwarded_msg.message_id,
                     "file_type": file_type,
@@ -150,4 +156,4 @@ async def test_auto_forward(context, chat_id):
             chat_id=chat_id,
             text=f"❌ **Auto-Forward Test Error**\n\nUnexpected error: {str(e)}"
                 )
-            
+        
