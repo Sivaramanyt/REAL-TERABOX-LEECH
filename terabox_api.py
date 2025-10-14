@@ -74,7 +74,7 @@ class TeraboxAPI:
                 "name": "WDZone",
                 "url": "https://wdzone-terabox-api.vercel.app/api",
                 "method": "POST",
-                "payload": {"url": url}  # WDZone uses original URL, not converted
+                "payload": {"url": url}  # WDZone uses original URL
             }
         ]
         
@@ -228,4 +228,46 @@ class TeraboxAPI:
             logger.error(f"❌ Error extracting file info: {e}")
         
         return None
-    
+
+
+# ===== BACKWARD COMPATIBILITY FUNCTIONS =====
+# These allow old code to still work with new class structure
+
+def extract_terabox_data(url: str) -> Dict:
+    """
+    Backward compatibility wrapper for old imports
+    Usage: from terabox_api import extract_terabox_data
+    """
+    api = TeraboxAPI()
+    return api.extract_data(url)
+
+
+def format_size(size_input) -> str:
+    """
+    Format bytes to human readable size
+    Handles both int and string inputs
+    """
+    try:
+        # If it's already a formatted string (e.g., "125 MB"), return as-is
+        if isinstance(size_input, str):
+            if any(unit in size_input.upper() for unit in ['B', 'KB', 'MB', 'GB', 'TB']):
+                return size_input
+            # Try to convert string to int
+            try:
+                size_input = int(size_input)
+            except:
+                return str(size_input)
+        
+        # Convert to int
+        size_bytes = int(size_input)
+        
+        # Format
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024.0
+        
+        return f"{size_bytes:.2f} PB"
+    except:
+        return str(size_input)
+                
