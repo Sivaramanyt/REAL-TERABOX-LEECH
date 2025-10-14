@@ -25,6 +25,7 @@ TERABOX_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+
 async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT_TYPE, terabox_url: str, user_id: int, status_msg):
     """
     Background task for downloading and uploading
@@ -42,12 +43,44 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
             parse_mode='Markdown'
         )
         
-        file_info = extract_terabox_data(terabox_url)
+        # ✅ FIXED: New API returns {"files": [...]}
+        result = extract_terabox_data(terabox_url)
+        files = result.get("files", [])
         
-        filename = file_info['filename']
-        file_size = file_info['size']
-        size_readable = file_info['size_readable']
-        download_url = file_info['download_url']
+        if not files:
+            await status_msg.edit_text(
+                "❌ **No files found!**",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Process first file
+        file_info = files[0]
+        
+        # ✅ FIXED: Use correct keys from new API
+        filename = file_info.get('name', 'Terabox File')
+        size_readable = file_info.get('size', 'Unknown')
+        download_url = file_info.get('download_url')
+        
+        # Convert size to bytes for validation
+        file_size = 0
+        try:
+            # Try to parse size string like "18.08 MB"
+            size_parts = size_readable.split()
+            if len(size_parts) == 2:
+                size_value = float(size_parts[0])
+                size_unit = size_parts[1].upper()
+                
+                if size_unit == 'KB':
+                    file_size = int(size_value * 1024)
+                elif size_unit == 'MB':
+                    file_size = int(size_value * 1024 * 1024)
+                elif size_unit == 'GB':
+                    file_size = int(size_value * 1024 * 1024 * 1024)
+                elif size_unit == 'B':
+                    file_size = int(size_value)
+        except:
+            pass
         
         # Increment attempts
         increment_leech_attempts(user_id)
@@ -65,7 +98,7 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
             )
             return
         
-        # Check size
+        # Check size (2GB limit)
         max_size = 2 * 1024 * 1024 * 1024
         if file_size > max_size:
             await status_msg.edit_text(
@@ -134,10 +167,9 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
                 "✅ **File uploaded!**\n♾️ **Status:** Premium",
                 parse_mode='Markdown'
             )
-        
+    
     except Exception as e:
         logger.error(f"❌ [User {user_id}] Error: {e}")
-        
         if file_path:
             cleanup_file(file_path)
         
@@ -191,4 +223,4 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # Return immediately - don't wait for download to finish
     return True
-        
+            
