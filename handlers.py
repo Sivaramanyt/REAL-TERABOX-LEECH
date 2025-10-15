@@ -86,9 +86,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     return
             else:
-                # LEECH VERIFICATION (existing code)
+                # LEECH VERIFICATION - Remove verify_ prefix before checking
                 logger.info(f"LEECH VERIFICATION TOKEN: {full_token}")
-                verified_user_id = verify_user(full_token)
+                # ✅ CRITICAL FIX: Remove "verify_" prefix before verifying
+                # Database stores token WITHOUT prefix, but extract_token_from_start returns WITH prefix
+                actual_token = full_token.replace("verify_", "", 1)
+                logger.info(f"Token after removing prefix: {actual_token}")
+                logger.info(f"Calling verify_user({actual_token})")
+                verified_user_id = verify_user(actual_token)  # Pass without prefix
+                logger.info(f"Verification result: {verified_user_id}")
+                
                 if verified_user_id:
                     validity_hours = VERIFY_TOKEN_TIMEOUT / 3600
                     
@@ -116,6 +123,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(success_message, parse_mode='Markdown')
                     return
                 else:
+                    logger.warning(f"❌ Leech verification FAILED for user {user_id}")
                     await update.message.reply_text(
                         "❌ Verification failed. Please try again.",
                         parse_mode='Markdown'
@@ -437,4 +445,4 @@ async def reset_video_verify(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
-        
+                
