@@ -28,10 +28,10 @@ async def auto_save_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message:
         return
     
-    # Check if message is from storage channel
-    from config import VIDEO_STORAGE_CHANNEL
+    # ✅ FIXED: Use BACKUP_CHANNEL_ID instead of VIDEO_STORAGE_CHANNEL
+    from config import BACKUP_CHANNEL_ID
     
-    if message.chat.id != VIDEO_STORAGE_CHANNEL:
+    if message.chat.id != BACKUP_CHANNEL_ID:
         return
     
     # Check if message has video
@@ -61,7 +61,7 @@ async def auto_save_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"✅ Video saved: msg_id={message.message_id}, file_size={video_data['file_size']}")
         else:
             logger.info(f"ℹ️ Video already exists: {video_data['file_unique_id']}")
-    
+            
     except Exception as e:
         logger.error(f"❌ Error saving video: {e}")
 
@@ -125,8 +125,8 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         random_video = list(videos_collection.aggregate([{"$sample": {"size": 1}}]))[0]
         
         # ✅ CRITICAL: Send video BEFORE incrementing attempts
-        # Create inline keyboard with "Next Video" button
-        keyboard = [[InlineKeyboardButton("🎬 Next Video", callback_data="next_video")]]
+        # ✅ FIXED: Use correct callback_data "random_video"
+        keyboard = [[InlineKeyboardButton("🎬 Next Video", callback_data="random_video")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         caption = random_video.get('caption', '🎬 Random Video')
@@ -167,7 +167,7 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "♾️ **Status:** Video Verified (Unlimited videos)",
                 parse_mode='Markdown'
             )
-    
+            
     except Exception as e:
         logger.error(f"❌ Error sending random video: {e}")
         await update.message.reply_text(
@@ -175,7 +175,8 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
 
-async def handle_next_video_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ✅ FIXED: Renamed function to match main.py
+async def handle_random_video_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle "Next Video" button clicks
     FIXED: Increments attempts AFTER successful send
@@ -235,7 +236,8 @@ async def handle_next_video_callback(update: Update, context: ContextTypes.DEFAU
         random_video = list(videos_collection.aggregate([{"$sample": {"size": 1}}]))[0]
         
         # ✅ CRITICAL: Send video BEFORE incrementing
-        keyboard = [[InlineKeyboardButton("🎬 Next Video", callback_data="next_video")]]
+        # ✅ FIXED: Use correct callback_data "random_video"
+        keyboard = [[InlineKeyboardButton("🎬 Next Video", callback_data="random_video")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         caption = random_video.get('caption', '🎬 Random Video')
@@ -278,7 +280,7 @@ async def handle_next_video_callback(update: Update, context: ContextTypes.DEFAU
                 text="♾️ **Unlimited videos available!**",
                 parse_mode='Markdown'
             )
-    
+            
     except Exception as e:
         logger.error(f"❌ Error in next video callback: {e}")
         await query.message.reply_text(
