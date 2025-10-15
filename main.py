@@ -13,7 +13,9 @@ from handlers import (
     stats, test_forward, test_shortlink, reset_verify,
     reset_video_verify
 )
-from database import init_db
+
+# ✅ CHANGED: Removed init_db import (no longer exists in new database.py)
+# from database import init_db  # ❌ REMOVED THIS LINE
 from health_server import run_health_server
 
 # 🎯 IMPORT: Terabox handler
@@ -65,15 +67,13 @@ def print_startup_banner():
     print(f"🔐 Verification Settings:")
     print(f"   🎟️ Free Leech Attempts: {FREE_LEECH_LIMIT}")
     print(f"   ⏰ Token Validity: {VERIFY_TOKEN_TIMEOUT / 3600} hours\n")
-    
     print("=" * 50 + "\n")
 
 # ✅ NO async def main() - just run directly!
 if __name__ == '__main__':
-    # Initialize database
-    if not init_db():
-        logger.error("❌ Database initialization failed!")
-        sys.exit(1)
+    # ✅ CHANGED: Removed init_db() call - database auto-connects on import
+    # Database connection happens automatically when handlers import database functions
+    logger.info("✅ Database module loaded - auto-connecting to MongoDB")
     
     print_startup_banner()
     
