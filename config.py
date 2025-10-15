@@ -123,8 +123,8 @@ FORWARD_CAPTION_TEMPLATE = """
 # Validation
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is required")
-if not MONGODB_URL:
-    raise ValueError("MONGODB_URL is required")
+if not MONGODB_URI:
+    raise ValueError("MONGODB_URI is required")
 if not SHORTLINK_API:
     raise ValueError("SHORTLINK_API is required - Get from your shortlink service")
 if not SHORTLINK_URL:
