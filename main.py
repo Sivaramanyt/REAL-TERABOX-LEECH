@@ -4,6 +4,7 @@ Terabox Leech Bot with Universal Shortlink Verification & Auto-Forward & Random 
 
 import logging
 import asyncio
+import threading  # ✅ ADDED: Import threading
 import sys
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -55,7 +56,7 @@ def print_startup_banner():
     print(f"📋 Bot Configuration:")
     print(f"   🤖 Bot Username: @{BOT_USERNAME}")
     print(f"   👤 Owner ID: {OWNER_ID}")
-    print(f"   💾 Database: ✅ Connected\n")  # ✅ FIXED: Removed init_db() call
+    print(f"   💾 Database: ✅ Connected\n")
     
     print(f"💰 Monetization Setup:")
     print(f"   🌐 Universal Shortlinks: {'✅ Enabled' if SHORTLINK_API else '❌ Disabled'}")
@@ -81,12 +82,12 @@ def print_startup_banner():
 
 async def main():
     """Main bot function"""
-    # ✅ FIXED: Initialize database FIRST, before banner
+    # Initialize database FIRST
     if not init_db():
         logger.error("❌ Database initialization failed!")
         return
     
-    # ✅ FIXED: Print banner AFTER init_db
+    # Print banner AFTER init_db
     print_startup_banner()
     
     # Build application
@@ -129,11 +130,12 @@ async def main():
     
     logger.info("✅ All handlers registered")
     
-    # Start health server
-    run_health_server()
-    logger.info("✅ Health server started on port 8000")
+    # ✅ FIXED: Start health server in background thread (non-blocking)
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    logger.info("✅ Health server started in background thread")
     
-    # Start bot
+    # Start bot (now this will actually run!)
     logger.info("🚀 Starting bot polling...")
     await application.run_polling(allowed_updates=Update.ALL_TYPES)
 
@@ -144,4 +146,4 @@ if __name__ == '__main__':
         logger.info("👋 Bot stopped by user")
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
-        
+    
