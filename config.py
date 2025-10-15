@@ -13,7 +13,7 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "TeraboxLeechBot")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # Database Configuration
-MONGODB_URI = os.getenv("MONGODB_URI")
+MONGODB_URL = os.getenv("MONGODB_URL")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "terabox_bot")
 
 # AUTO-FORWARD CONFIGURATION
@@ -123,8 +123,8 @@ FORWARD_CAPTION_TEMPLATE = """
 # Validation
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is required")
-if not MONGODB_URI:
-    raise ValueError("MONGODB_URI is required")
+if not MONGODB_URL:
+    raise ValueError("MONGODB_URL is required")
 if not SHORTLINK_API:
     raise ValueError("SHORTLINK_API is required - Get from your shortlink service")
 if not SHORTLINK_URL:
