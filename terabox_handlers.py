@@ -40,13 +40,29 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
             parse_mode='Markdown'
         )
         
-        file_info = extract_terabox_data(terabox_url)
+        result = extract_terabox_data(terabox_url)
         
-        # ✅ FIXED: Match actual API response format from terabox_api.py
-        filename = file_info.get('file_name', 'Unknown')  # API uses 'file_name'
-        file_size = file_info.get('sizebytes', 0)  # API uses 'sizebytes' for bytes
-        size_readable = file_info.get('size', 'Unknown')  # API uses 'size' for readable string
-        download_url = file_info.get('direct_link', '')  # API uses 'direct_link'
+        # ✅ FIXED: extract_terabox_data returns {"files": [...]}, get first file
+        if not result or "files" not in result or not result["files"]:
+            raise Exception("No files found in Terabox link")
+        
+        file_info = result["files"][0]  # Get first file from the list
+        
+        # ✅ FIXED: Now access the correct field names from the API
+        filename = file_info.get('name', 'Unknown')           # API uses 'name'
+        size_readable = file_info.get('size', 'Unknown')      # API uses 'size' (already formatted)
+        download_url = file_info.get('download_url', '')      # API uses 'download_url'
+        
+        # Convert size to bytes for validation (if possible)
+        file_size = 0
+        try:
+            # Try to parse size string like "22.14 MB" to bytes
+            if 'MB' in size_readable:
+                file_size = int(float(size_readable.split('MB')[0].strip()) * 1024 * 1024)
+            elif 'GB' in size_readable:
+                file_size = int(float(size_readable.split('GB')[0].strip()) * 1024 * 1024 * 1024)
+        except:
+            pass
         
         # Increment attempts
         increment_leech_attempts(user_id)
@@ -117,7 +133,7 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
         except:
             pass
         
-        # Step 6: Send completion message (FIXED VERSION)
+        # Step 6: Send completion message
         try:
             if not is_verified and used_attempts < FREE_LEECH_LIMIT:
                 remaining = FREE_LEECH_LIMIT - used_attempts
@@ -152,7 +168,6 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
                 )
         except Exception as e:
             logger.error(f"❌ [User {user_id}] Error sending completion message: {e}")
-            # File was already delivered, so just send simple message
             try:
                 await update.message.reply_text("✅ **File uploaded!**", parse_mode='Markdown')
             except:
@@ -225,4 +240,4 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # Return immediately - don't wait for download to finish
     return True
-    
+        
