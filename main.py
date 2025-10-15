@@ -4,7 +4,7 @@ Terabox Leech Bot with Universal Shortlink Verification & Auto-Forward & Random 
 
 import logging
 import asyncio
-import threading  # ✅ ADDED: Import threading
+import threading
 import sys
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -130,20 +130,24 @@ async def main():
     
     logger.info("✅ All handlers registered")
     
-    # ✅ FIXED: Start health server in background thread (non-blocking)
+    # Start health server in background thread (non-blocking)
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
     logger.info("✅ Health server started in background thread")
     
-    # Start bot (now this will actually run!)
+    # Start bot
     logger.info("🚀 Starting bot polling...")
     await application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        # ✅ FIXED: Use get_event_loop() instead of asyncio.run() to avoid loop conflict
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(main())
     except KeyboardInterrupt:
         logger.info("👋 Bot stopped by user")
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
     
