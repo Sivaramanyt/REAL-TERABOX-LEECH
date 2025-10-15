@@ -7,9 +7,11 @@ FIXED: Direct shortlink creation without verify_ prefix
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+
 from database import (
-    get_user_data, set_video_verification_token, verify_video_user
+    get_user_data, set_video_verification_token, verify_video_token  # ✅ CHANGED: verify_video_user → verify_video_token
 )
+
 from verification import generate_verify_token, create_universal_shortlink
 from config import FREE_VIDEO_LIMIT, BOT_USERNAME
 
@@ -91,11 +93,11 @@ async def send_video_verification_message(update: Update, context: ContextTypes.
     # Create inline keyboard
     keyboard = [
         [InlineKeyboardButton("✅ VERIFY FOR VIDEOS", url=shortlink)],
-        [InlineKeyboardButton("📺 HOW TO VERIFY?", url="https://t.me/Sr_Movie_Links/52")],  # ← CHANGED
-        [InlineKeyboardButton("💬 ANY HELP", url="https://t.me/Siva9789")]  # ← ADDED NEW BUTTON
+        [InlineKeyboardButton("📺 HOW TO VERIFY?", url="https://t.me/Sr_Movie_Links/52")],
+        [InlineKeyboardButton("💬 ANY HELP", url="https://t.me/Siva9789")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.effective_message.reply_text(
         message,
         reply_markup=reply_markup,
@@ -111,7 +113,6 @@ async def handle_video_verification_callback(update: Update, context: ContextTyp
     await query.answer()
     
     user_id = get_user_id_from_update(update)
-    
     if not user_id:
         await query.message.reply_text("❌ Error: Could not identify user")
         return
@@ -129,4 +130,4 @@ async def handle_video_verification_callback(update: Update, context: ContextTyp
     
     # Send verification message
     await send_video_verification_message(update, context)
-            
+    
