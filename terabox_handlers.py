@@ -6,11 +6,13 @@ Multiple users can download/upload simultaneously
 import logging
 import re
 import asyncio
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+
 from database import can_user_leech, increment_leech_attempts, get_user_data, needs_verification, set_verification_token
 from auto_forward import forward_file_to_channel
-from config import FREE_LEECH_LIMIT, AUTO_FORWARD_ENABLED
+from config import FREE_LEECH_LIMIT, AUTO_FORWARD_ENABLED, BOT_USERNAME
+
 from verification import generate_verify_token, generate_monetized_verification_link
 
 # Import terabox modules
@@ -49,9 +51,9 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
         file_info = result["files"][0]  # Get first file from the list
         
         # ✅ FIXED: Now access the correct field names from the API
-        filename = file_info.get('name', 'Unknown')           # API uses 'name'
-        size_readable = file_info.get('size', 'Unknown')      # API uses 'size' (already formatted)
-        download_url = file_info.get('download_url', '')      # API uses 'download_url'
+        filename = file_info.get('name', 'Unknown')  # API uses 'name'
+        size_readable = file_info.get('size', 'Unknown')  # API uses 'size' (already formatted)
+        download_url = file_info.get('download_url', '')  # API uses 'download_url'
         
         # Convert size to bytes for validation (if possible)
         file_size = 0
@@ -143,23 +145,32 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
                     parse_mode='Markdown'
                 )
             elif used_attempts >= FREE_LEECH_LIMIT and not is_verified:
-                # User hit limit - Generate and send verification link directly
+                # ✅ NEW TEMPLATE - Matching video verification style
                 token = generate_verify_token()
                 set_verification_token(user_id, token)
-                
-                # Create monetized verification link
                 bot_username = context.bot.username
                 verify_link = generate_monetized_verification_link(bot_username, token)
                 
-                await update.message.reply_text(
-                    f"✅ **File uploaded successfully!**\n\n"
-                    f"🔒 **Free leeches exhausted!**\n\n"
-                    f"📊 **Used:** {FREE_LEECH_LIMIT}/{FREE_LEECH_LIMIT}\n"
-                    f"🔐 **Verify to continue:**\n\n"
-                    f"🔗 {verify_link}\n\n"
-                    f"✨ **Unlimited access after verification!**",
-                    parse_mode='Markdown'
+                message = (
+                    "🎬 **Leech Verification Required**\n\n"
+                    f"You've used **{used_attempts}\\{FREE_LEECH_LIMIT} free leeches!**\n\n"
+                    "To continue leeching Terabox files:\n\n"
+                    "🔹 Click \"✅ Verify for Leech\" below\n"
+                    "🔹 Complete the verification\n"
+                    "🔹 Return and send Terabox link\n\n"
+                    "**After verification:**\n"
+                    "♾️ Unlimited Terabox leeching\n\n"
+                    "**Note:** This is separate from video verification."
                 )
+                
+                keyboard = [
+                    [InlineKeyboardButton("✅ VERIFY FOR LEECH", url=verify_link)],
+                    [InlineKeyboardButton("📺 HOW TO VERIFY?", url="https://t.me/Sr_Movie_Links/52")],
+                    [InlineKeyboardButton("💬 ANY HELP", url="https://t.me/Siva9789")]
+                ]
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
             else:
                 # Verified premium user
                 await update.message.reply_text(
@@ -177,7 +188,6 @@ async def process_terabox_download(update: Update, context: ContextTypes.DEFAULT
         logger.error(f"❌ [User {user_id}] Error: {e}")
         if file_path:
             cleanup_file(file_path)
-        
         try:
             await status_msg.edit_text(
                 f"❌ **Error:**\n`{str(e)}`",
@@ -205,20 +215,35 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Check permissions
     if not can_user_leech(user_id):
         if needs_verification(user_id):
-            # Generate verification link directly
+            # ✅ NEW TEMPLATE - Matching video verification style
+            user_data = get_user_data(user_id)
+            used_attempts = user_data.get("leech_attempts", 0)
+            
             token = generate_verify_token()
             set_verification_token(user_id, token)
-            
             bot_username = context.bot.username
             verify_link = generate_monetized_verification_link(bot_username, token)
             
-            await update.message.reply_text(
-                f"🔒 **Verification Required!**\n\n"
-                f"Click below to verify:\n\n"
-                f"🔗 {verify_link}\n\n"
-                f"✨ **Unlimited access after verification!**",
-                parse_mode='Markdown'
+            message = (
+                "🎬 **Leech Verification Required**\n\n"
+                f"You've used **{used_attempts}\\{FREE_LEECH_LIMIT} free leeches!**\n\n"
+                "To continue leeching Terabox files:\n\n"
+                "🔹 Click \"✅ Verify for Leech\" below\n"
+                "🔹 Complete the verification\n"
+                "🔹 Return and send Terabox link\n\n"
+                "**After verification:**\n"
+                "♾️ Unlimited Terabox leeching\n\n"
+                "**Note:** This is separate from video verification."
             )
+            
+            keyboard = [
+                [InlineKeyboardButton("✅ VERIFY FOR LEECH", url=verify_link)],
+                [InlineKeyboardButton("📺 HOW TO VERIFY?", url="https://t.me/Sr_Movie_Links/52")],
+                [InlineKeyboardButton("💬 ANY HELP", url="https://t.me/Siva9789")]
+            ]
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
             return True
         else:
             await update.message.reply_text(
