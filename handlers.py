@@ -5,8 +5,8 @@ from telegram.ext import ContextTypes
 
 from database import (
     get_user_data, increment_leech_attempts, can_user_leech,
-    needs_verification, set_verification_token, verify_token, get_user_stats,  # ✅ CHANGED: verify_user → verify_token, get_bot_stats → get_user_stats
-    users_collection, verify_video_token  # ✅ CHANGED: verify_video_user → verify_video_token
+    needs_verification, set_verification_token, verify_token, get_user_stats,
+    users_collection, verify_video_token
 )
 
 from verification import (
@@ -45,9 +45,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # VIDEO VERIFICATION
                 actual_token = full_token.replace("video_", "", 1)
                 logger.info(f"Token after removing prefix: {actual_token}")
-                logger.info(f"Calling verify_video_token({actual_token})")  # ✅ CHANGED function name
+                logger.info(f"Calling verify_video_token({actual_token})")
                 
-                verified_user_id = verify_video_token(actual_token)  # ✅ CHANGED: verify_video_user → verify_video_token
+                verified_user_id = verify_video_token(actual_token)
                 logger.info(f"Verification result: {verified_user_id}")
                 
                 if verified_user_id:
@@ -91,9 +91,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"LEECH VERIFICATION TOKEN: {full_token}")
                 actual_token = full_token.replace("verify_", "", 1)
                 logger.info(f"Token after removing prefix: {actual_token}")
-                logger.info(f"Calling verify_token({actual_token})")  # ✅ CHANGED function name
+                logger.info(f"Calling verify_token({actual_token})")
                 
-                verified_user_id = verify_token(actual_token)  # ✅ CHANGED: verify_user → verify_token
+                verified_user_id = verify_token(actual_token)
                 logger.info(f"Verification result: {verified_user_id}")
                 
                 if verified_user_id:
@@ -289,20 +289,31 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {'🚀 Status: Unlimited Access' if is_verified else f'⏳ Remaining: {FREE_LEECH_LIMIT - used_attempts} free attempts'}
 """
     
-    # Show bot stats for owner
+    # ✅ FIXED: Show bot stats for owner (direct database queries)
     if user_id == OWNER_ID:
-        bot_stats = get_user_stats()  # ✅ CHANGED: get_bot_stats → get_user_stats
-        bot_stats_text = f"""
+        try:
+            # Direct database queries for bot stats
+            total_users = users_collection.count_documents({})
+            verified_users = users_collection.count_documents({"is_verified": True})
+            
+            # Calculate total attempts
+            pipeline = [{"$group": {"_id": None, "total": {"$sum": "$leech_attempts"}}}]
+            total_attempts_result = list(users_collection.aggregate(pipeline))
+            total_attempts = total_attempts_result[0]["total"] if total_attempts_result else 0
+            
+            bot_stats_text = f"""
 📊 **Bot Stats (Admin)**
 
-👥 Total Users: {bot_stats['total_users']}
-✅ Verified Users: {bot_stats['verified_users']}
-📈 Total Attempts: {bot_stats['total_attempts']}
+👥 Total Users: {total_users}
+✅ Verified Users: {verified_users}
+📈 Total Attempts: {total_attempts}
 📢 Backup Channel: {BACKUP_CHANNEL_ID if BACKUP_CHANNEL_ID else 'Not Set'}
 🔗 Universal Shortlinks: Enabled
 💰 Monetization: Active
 """
-        user_stats += bot_stats_text
+            user_stats += bot_stats_text
+        except Exception as e:
+            logger.error(f"Error getting bot stats: {e}")
     
     await update.message.reply_text(user_stats, parse_mode='Markdown')
 
@@ -450,4 +461,3 @@ async def reset_video_verify(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
-        
