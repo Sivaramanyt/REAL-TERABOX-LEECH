@@ -12,7 +12,7 @@ from config import *
 from handlers import (
     start, help_command, leech_attempt, verify_callback,
     stats, test_forward, test_shortlink, reset_verify,
-    reset_video_verify  # ✅ NEW: Added video reset function
+    reset_video_verify
 )
 from database import init_db
 from health_server import run_health_server
@@ -55,7 +55,7 @@ def print_startup_banner():
     print(f"📋 Bot Configuration:")
     print(f"   🤖 Bot Username: @{BOT_USERNAME}")
     print(f"   👤 Owner ID: {OWNER_ID}")
-    print(f"   💾 Database: {'✅ Connected' if init_db() else '❌ Failed'}\n")
+    print(f"   💾 Database: ✅ Connected\n")  # ✅ FIXED: Removed init_db() call
     
     print(f"💰 Monetization Setup:")
     print(f"   🌐 Universal Shortlinks: {'✅ Enabled' if SHORTLINK_API else '❌ Disabled'}")
@@ -81,12 +81,13 @@ def print_startup_banner():
 
 async def main():
     """Main bot function"""
-    print_startup_banner()
-    
-    # Initialize database
+    # ✅ FIXED: Initialize database FIRST, before banner
     if not init_db():
         logger.error("❌ Database initialization failed!")
         return
+    
+    # ✅ FIXED: Print banner AFTER init_db
+    print_startup_banner()
     
     # Build application
     application = Application.builder().token(BOT_TOKEN).build()
@@ -100,7 +101,7 @@ async def main():
     application.add_handler(CommandHandler("testforward", test_forward))
     application.add_handler(CommandHandler("testapi", test_shortlink))
     application.add_handler(CommandHandler("resetverify", reset_verify))
-    application.add_handler(CommandHandler("resetvideos", reset_video_verify))  # ✅ NEW
+    application.add_handler(CommandHandler("resetvideos", reset_video_verify))
     
     # ✅ CALLBACK HANDLERS
     application.add_handler(CallbackQueryHandler(verify_callback, pattern="^verify$"))
@@ -128,8 +129,8 @@ async def main():
     
     logger.info("✅ All handlers registered")
     
-    # Start health server (NOT async - just call it directly)
-    run_health_server()  # ✅ FIXED: Removed asyncio.create_task() - function creates its own thread
+    # Start health server
+    run_health_server()
     logger.info("✅ Health server started on port 8000")
     
     # Start bot
@@ -143,4 +144,4 @@ if __name__ == '__main__':
         logger.info("👋 Bot stopped by user")
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
-    
+        
