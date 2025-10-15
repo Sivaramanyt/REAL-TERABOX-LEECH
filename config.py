@@ -13,7 +13,7 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "TeraboxLeechBot")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # Database Configuration
-MONGODB_URL = os.getenv("MONGODB_URL")
+MONGODB_URI = os.getenv("MONGODB_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "terabox_bot")
 
 # AUTO-FORWARD CONFIGURATION
