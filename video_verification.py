@@ -90,8 +90,9 @@ async def send_video_verification_message(update: Update, context: ContextTypes.
     
     # Create inline keyboard
     keyboard = [
-        [InlineKeyboardButton("✅ Verify for Videos", url=shortlink)],
-        [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/RARE_VIDEOS")]
+        [InlineKeyboardButton("✅ VERIFY FOR VIDEOS", url=shortlink)],
+        [InlineKeyboardButton("📺 HOW TO VERIFY?", url="https://t.me/Sr_Movie_Links/52")],  # ← CHANGED
+        [InlineKeyboardButton("💬 ANY HELP", url="https://t.me/Siva9789")]  # ← ADDED NEW BUTTON
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
