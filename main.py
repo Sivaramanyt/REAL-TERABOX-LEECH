@@ -31,12 +31,12 @@ logger = logging.getLogger(__name__)
 
 # 🎬 NEW: Import random video handlers (BOTH command and callback)
 try:
-    from random_videos import send_random_video, handle_next_video_callback  # ✅ FIXED: Changed function name
+    from random_videos import send_random_video, handle_next_video_callback
 except ImportError as e:
     logger.warning(f"⚠️ random_videos.py import failed: {e}")
     RANDOM_VIDEOS_ENABLED = False
     send_random_video = None
-    handle_next_video_callback = None  # ✅ FIXED: Changed function name
+    handle_next_video_callback = None
 else:
     RANDOM_VIDEOS_ENABLED = True
 
@@ -108,7 +108,7 @@ async def main():
     # 🎬 NEW: Random Videos handlers
     if RANDOM_VIDEOS_ENABLED:
         application.add_handler(CommandHandler("videos", send_random_video))
-        application.add_handler(CallbackQueryHandler(handle_next_video_callback, pattern="^next_video$"))  # ✅ FIXED: Changed pattern
+        application.add_handler(CallbackQueryHandler(handle_next_video_callback, pattern="^next_video$"))
         logger.info("✅ Random Videos handlers registered")
     
     # 🎬 NEW: Auto-save video from channel
@@ -128,9 +128,9 @@ async def main():
     
     logger.info("✅ All handlers registered")
     
-    # Start health server (async)
-    asyncio.create_task(run_health_server())
-    logger.info("✅ Health server started on port 8080")
+    # Start health server (NOT async - just call it directly)
+    run_health_server()  # ✅ FIXED: Removed asyncio.create_task() - function creates its own thread
+    logger.info("✅ Health server started on port 8000")
     
     # Start bot
     logger.info("🚀 Starting bot polling...")
