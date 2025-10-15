@@ -10,12 +10,13 @@ import random
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from database import get_db
+
+# ✅ FIXED: Import db directly instead of get_db()
+from database import db
 
 logger = logging.getLogger(__name__)
 
-# MongoDB collection for videos
-db = get_db()
+# ✅ FIXED: Access videos collection directly
 videos_collection = db['saved_videos']
 
 async def auto_save_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -29,6 +30,7 @@ async def auto_save_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Check if message is from storage channel
     from config import VIDEO_STORAGE_CHANNEL
+    
     if message.chat.id != VIDEO_STORAGE_CHANNEL:
         return
     
@@ -59,7 +61,7 @@ async def auto_save_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"✅ Video saved: msg_id={message.message_id}, file_size={video_data['file_size']}")
         else:
             logger.info(f"ℹ️ Video already exists: {video_data['file_unique_id']}")
-            
+    
     except Exception as e:
         logger.error(f"❌ Error saving video: {e}")
 
@@ -81,6 +83,7 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # ✅ FIXED: Get or create user data (auto-registers if needed)
         user_data = get_user_data(user_id)
+        
         if not user_data:
             logger.error(f"❌ Failed to get/create user data for {user_id}")
             await update.message.reply_text(
@@ -164,7 +167,7 @@ async def send_random_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "♾️ **Status:** Video Verified (Unlimited videos)",
                 parse_mode='Markdown'
             )
-            
+    
     except Exception as e:
         logger.error(f"❌ Error sending random video: {e}")
         await update.message.reply_text(
@@ -192,6 +195,7 @@ async def handle_next_video_callback(update: Update, context: ContextTypes.DEFAU
     try:
         # Get user data
         user_data = get_user_data(user_id)
+        
         if not user_data:
             await query.message.reply_text(
                 "❌ Error accessing database. Please try /start",
@@ -274,11 +278,11 @@ async def handle_next_video_callback(update: Update, context: ContextTypes.DEFAU
                 text="♾️ **Unlimited videos available!**",
                 parse_mode='Markdown'
             )
-            
+    
     except Exception as e:
         logger.error(f"❌ Error in next video callback: {e}")
         await query.message.reply_text(
             f"❌ **Error:** {str(e)}",
             parse_mode='Markdown'
-                )
-        
+            )
+            
