@@ -1,14 +1,13 @@
 """
 Database - WITH DAILY RESET SYSTEM (Resets at 12:00 AM IST)
-Users get 3 free videos + 3 free leeches EVERY DAY
+Uses built-in datetime - NO external timezone library needed
 """
 
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient
 from typing import Optional, Dict
-import pytz
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -22,8 +21,8 @@ client = MongoClient(MONGODB_URI)
 db = client["terabox_bot"]
 users_collection = db["users"]
 
-# Timezone setup for IST
-IST = pytz.timezone('Asia/Kolkata')
+# IST timezone (UTC+5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # Create indexes for better performance
 try:
@@ -34,7 +33,7 @@ try:
         users_collection.create_index("user_id", unique=True)
         logger.info("✅ Created index on user_id")
     else:
-        logger.info("ℹ️ Database already has 4 documents, skipping index creation")
+        logger.info("ℹ️ Database already has indexes")
 except Exception as e:
     logger.warning(f"⚠️ Index creation skipped or failed: {e}")
 
@@ -60,8 +59,8 @@ def should_reset_daily_limit(user_data: Dict, field_name: str) -> bool:
         return True
     
     # Convert to IST timezone aware datetime
-    if not last_reset.tzinfo:
-        last_reset = IST.localize(last_reset)
+    if last_reset.tzinfo is None:
+        last_reset = last_reset.replace(tzinfo=IST)
     
     today_start = get_today_start()
     
@@ -114,14 +113,14 @@ def get_user_data(user_id: int) -> Optional[Dict]:
             "verify_token": None,
             "token_expiry": None,
             "verify_expiry": None,
-            "last_leech_reset": now_ist,  # ✅ NEW: Track last leech reset
+            "last_leech_reset": now_ist,
             # Video system
             "video_attempts": 0,
             "is_video_verified": False,
             "video_verify_token": None,
             "video_token_expiry": None,
             "video_verify_expiry": None,
-            "last_video_reset": now_ist  # ✅ NEW: Track last video reset
+            "last_video_reset": now_ist
         }
         users_collection.insert_one(new_user)
         logger.info(f"✅ Created new user: {user_id}")
@@ -130,11 +129,7 @@ def get_user_data(user_id: int) -> Optional[Dict]:
     return user
 
 def can_user_watch_video(user_id: int) -> bool:
-    """
-    Check if user can watch videos (with daily reset)
-    Returns True if: verified OR within daily limit
-    """
-    # ✅ FIRST: Reset attempts if it's a new day
+    """Check if user can watch videos (with daily reset)"""
     reset_daily_attempts_if_needed(user_id)
     
     user_data = get_user_data(user_id)
@@ -146,31 +141,26 @@ def can_user_watch_video(user_id: int) -> bool:
         video_verify_expiry = user_data.get("video_verify_expiry")
         if video_verify_expiry:
             now_ist = datetime.now(IST)
-            if not video_verify_expiry.tzinfo:
-                video_verify_expiry = IST.localize(video_verify_expiry)
+            if video_verify_expiry.tzinfo is None:
+                video_verify_expiry = video_verify_expiry.replace(tzinfo=IST)
             
             if now_ist < video_verify_expiry:
                 return True
             else:
-                # Verification expired, reset status
                 users_collection.update_one(
                     {"user_id": user_id},
                     {"$set": {"is_video_verified": False, "video_verify_expiry": None}}
                 )
                 logger.info(f"⏰ Video verification expired for user {user_id}")
     
-    # Check daily free limit (3 videos per day)
+    # Check daily free limit
     from config import FREE_VIDEO_LIMIT
     video_attempts = user_data.get("video_attempts", 0)
     
     return video_attempts < FREE_VIDEO_LIMIT
 
 def can_user_leech(user_id: int) -> bool:
-    """
-    Check if user can leech files (with daily reset)
-    Returns True if: verified OR within daily limit
-    """
-    # ✅ FIRST: Reset attempts if it's a new day
+    """Check if user can leech files (with daily reset)"""
     reset_daily_attempts_if_needed(user_id)
     
     user_data = get_user_data(user_id)
@@ -182,20 +172,19 @@ def can_user_leech(user_id: int) -> bool:
         verify_expiry = user_data.get("verify_expiry")
         if verify_expiry:
             now_ist = datetime.now(IST)
-            if not verify_expiry.tzinfo:
-                verify_expiry = IST.localize(verify_expiry)
+            if verify_expiry.tzinfo is None:
+                verify_expiry = verify_expiry.replace(tzinfo=IST)
             
             if now_ist < verify_expiry:
                 return True
             else:
-                # Verification expired, reset status
                 users_collection.update_one(
                     {"user_id": user_id},
                     {"$set": {"is_verified": False, "verify_expiry": None}}
                 )
                 logger.info(f"⏰ Leech verification expired for user {user_id}")
     
-    # Check daily free limit (3 leeches per day)
+    # Check daily free limit
     from config import FREE_LEECH_LIMIT
     leech_attempts = user_data.get("leech_attempts", 0)
     
@@ -204,9 +193,7 @@ def can_user_leech(user_id: int) -> bool:
 def increment_video_attempts(user_id: int) -> bool:
     """Increment video watch attempts"""
     try:
-        # Reset if needed before incrementing
         reset_daily_attempts_if_needed(user_id)
-        
         result = users_collection.update_one(
             {"user_id": user_id},
             {"$inc": {"video_attempts": 1}}
@@ -219,9 +206,7 @@ def increment_video_attempts(user_id: int) -> bool:
 def increment_leech_attempts(user_id: int) -> bool:
     """Increment leech attempts"""
     try:
-        # Reset if needed before incrementing
         reset_daily_attempts_if_needed(user_id)
-        
         result = users_collection.update_one(
             {"user_id": user_id},
             {"$inc": {"leech_attempts": 1}}
@@ -232,55 +217,46 @@ def increment_leech_attempts(user_id: int) -> bool:
         return False
 
 def needs_video_verification(user_id: int) -> bool:
-    """Check if user needs video verification (exceeded daily limit)"""
-    # Reset if needed
+    """Check if user needs video verification"""
     reset_daily_attempts_if_needed(user_id)
     
     user_data = get_user_data(user_id)
     if not user_data:
         return False
     
-    # Check if verified and not expired
     if user_data.get("is_video_verified"):
         video_verify_expiry = user_data.get("video_verify_expiry")
         if video_verify_expiry:
             now_ist = datetime.now(IST)
-            if not video_verify_expiry.tzinfo:
-                video_verify_expiry = IST.localize(video_verify_expiry)
+            if video_verify_expiry.tzinfo is None:
+                video_verify_expiry = video_verify_expiry.replace(tzinfo=IST)
             if now_ist < video_verify_expiry:
                 return False
     
-    # Check if exceeded daily limit
     from config import FREE_VIDEO_LIMIT
     video_attempts = user_data.get("video_attempts", 0)
     return video_attempts >= FREE_VIDEO_LIMIT
 
 def needs_verification(user_id: int) -> bool:
-    """Check if user needs leech verification (exceeded daily limit)"""
-    # Reset if needed
+    """Check if user needs leech verification"""
     reset_daily_attempts_if_needed(user_id)
     
     user_data = get_user_data(user_id)
     if not user_data:
         return False
     
-    # Check if verified and not expired
     if user_data.get("is_verified"):
         verify_expiry = user_data.get("verify_expiry")
         if verify_expiry:
             now_ist = datetime.now(IST)
-            if not verify_expiry.tzinfo:
-                verify_expiry = IST.localize(verify_expiry)
+            if verify_expiry.tzinfo is None:
+                verify_expiry = verify_expiry.replace(tzinfo=IST)
             if now_ist < verify_expiry:
                 return False
     
-    # Check if exceeded daily limit
     from config import FREE_LEECH_LIMIT
     leech_attempts = user_data.get("leech_attempts", 0)
     return leech_attempts >= FREE_LEECH_LIMIT
-
-# ===== REST OF THE FUNCTIONS STAY THE SAME =====
-# (set_verification_token, verify_token, set_video_verification_token, verify_video_token, get_user_stats)
 
 def set_verification_token(user_id: int, token: str) -> bool:
     """Set verification token for leech access"""
@@ -323,7 +299,7 @@ def verify_token(token: str) -> Optional[int]:
                     "token_expiry": None
                 }}
             )
-            logger.info(f"✅ User {user['user_id']} verified for leeching (valid for 7 days)")
+            logger.info(f"✅ User {user['user_id']} verified for leeching")
             return user["user_id"]
         
         return None
@@ -372,7 +348,7 @@ def verify_video_token(token: str) -> Optional[int]:
                     "video_token_expiry": None
                 }}
             )
-            logger.info(f"✅ User {user['user_id']} verified for videos (valid for 7 days)")
+            logger.info(f"✅ User {user['user_id']} verified for videos")
             return user["user_id"]
         
         return None
@@ -383,11 +359,7 @@ def verify_video_token(token: str) -> Optional[int]:
 def get_user_stats(user_id: int) -> Dict:
     """Get user statistics"""
     user_data = get_user_data(user_id)
-    
-    # Reset if needed before showing stats
     reset_daily_attempts_if_needed(user_id)
-    
-    # Refresh data after potential reset
     user_data = get_user_data(user_id)
     
     if not user_data:
@@ -401,5 +373,5 @@ def get_user_stats(user_id: int) -> Dict:
         "joined_date": user_data.get("joined_date"),
         "last_leech_reset": user_data.get("last_leech_reset"),
         "last_video_reset": user_data.get("last_video_reset")
-    }
+        }
     
