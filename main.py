@@ -1,5 +1,5 @@
 """
-Terabox Leech Bot with Universal Shortlink Verification & Auto-Forward & Random Videos & Channel Monitor
+Terabox Leech Bot with Universal Shortlink Verification & Auto-Forward & Random Videos
 """
 
 import logging
@@ -14,7 +14,7 @@ from handlers import (
     stats, test_forward, test_shortlink, reset_verify,
     reset_video_verify  # ✅ NEW: Added video reset function
 )
-from database import init_db
+from database import db  # ← CHANGED: Import db directly instead of init_db
 from health_server import run_health_server
 
 # 🎯 IMPORT: Terabox handler
@@ -105,8 +105,8 @@ def main():
         logger.info("🏥 Starting health server...")
         run_health_server()
         
-        logger.info("💾 Initializing database...")
-        init_db()
+        logger.info("💾 Database connection ready...")  # ← CHANGED: No init_db() call
+        # Database indexes will be created automatically when needed
         
         logger.info("🤖 Creating bot application...")
         application = Application.builder().token(BOT_TOKEN).build()
@@ -159,4 +159,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-        
+    
