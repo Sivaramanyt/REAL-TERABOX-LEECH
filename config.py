@@ -29,7 +29,7 @@ VERIFY_TUTORIAL = os.getenv("VERIFY_TUTORIAL", "https://youtube.com/watch?v=exam
 
 # Bot Settings
 FREE_LEECH_LIMIT = int(os.getenv("FREE_LEECH_LIMIT", "3"))
-VERIFY_TOKEN_TIMEOUT = int(os.getenv("VERIFY_TOKEN_TIMEOUT", "3600")) # 1 hour
+VERIFY_TOKEN_TIMEOUT = int(os.getenv("VERIFY_TOKEN_TIMEOUT", "21600")) # 1 hour
 
 # ========== NEW: VIDEO FEATURE CONFIGURATION ==========
 VIDEO_STORAGE_CHANNEL = int(os.getenv("VIDEO_STORAGE_CHANNEL", "0")) # Your private channel ID for videos
