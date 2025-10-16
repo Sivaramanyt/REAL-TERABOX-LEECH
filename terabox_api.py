@@ -1,6 +1,5 @@
 """
-Terabox API - Using UdayScriptsX Workers API
-This API is confirmed working as of October 16, 2025
+Terabox API - Using UdayScriptsX Workers API (FIXED URL Handling)
 """
 
 import requests
@@ -22,12 +21,6 @@ class TeraboxAPI:
     def extract_data(self, url: str, video_quality: str = "HD Video") -> Dict:
         """
         Extract Terabox file info using UdayScriptsX API
-        
-        Args:
-            url: Terabox share URL
-            
-        Returns:
-            Dict with files list
         """
         # Validate URL
         pattern = r"/s/(\w+)|surl=(\w+)|terabox|1024tera"
@@ -36,9 +29,19 @@ class TeraboxAPI:
         
         logger.info(f"🔍 Extracting from: {url}")
         
-        # Convert URL to 1024tera.com format (required by UdayScriptsX)
+        # FIXED: Convert URL properly - only change domain, not subdomain
         netloc = urlparse(url).netloc
-        converted_url = url.replace(netloc, "1024tera.com")
+        
+        # Convert various Terabox domains to 1024tera.com
+        if "terabox" in netloc.lower():
+            # terabox.com -> 1024tera.com
+            # www.terabox.com -> 1024tera.com  
+            # 1024terabox.com -> 1024tera.com
+            converted_url = url.replace(netloc, "1024tera.com")
+        else:
+            # Already in correct format
+            converted_url = url
+            
         logger.info(f"🔄 Converted URL: {converted_url}")
         
         try:
@@ -51,6 +54,12 @@ class TeraboxAPI:
             logger.info(f"📊 API Response: HTTP {response.status_code}")
             
             if response.status_code != 200:
+                # Log response body for debugging
+                try:
+                    error_data = response.text
+                    logger.error(f"API Error Response: {error_data}")
+                except:
+                    pass
                 raise Exception(f"API returned HTTP {response.status_code}")
             
             data = response.json()
@@ -80,8 +89,6 @@ class TeraboxAPI:
             raise Exception(error_msg)
 
 
-# ===== BACKWARD COMPATIBILITY FUNCTIONS =====
-
 def extract_terabox_data(url: str) -> Dict:
     """Backward compatibility wrapper"""
     api = TeraboxAPI()
@@ -90,7 +97,6 @@ def extract_terabox_data(url: str) -> Dict:
 def format_size(size_input) -> str:
     """Format bytes to human readable size"""
     try:
-        # If it's already a formatted string, return as-is
         if isinstance(size_input, str):
             if any(unit in size_input.upper() for unit in ['B', 'KB', 'MB', 'GB', 'TB']):
                 return size_input
