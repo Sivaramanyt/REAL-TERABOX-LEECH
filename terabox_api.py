@@ -12,7 +12,6 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-
 class TeraboxAPI:
     def __init__(self):
         """Initialize with 4 FREE APIs for maximum reliability"""
@@ -25,7 +24,7 @@ class TeraboxAPI:
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-origin"
         }
-    
+
     def extract_data(self, url: str, video_quality: str = "HD Video") -> Dict:
         """
         Extract Terabox file info using 4 fallback APIs
@@ -33,11 +32,10 @@ class TeraboxAPI:
         Args:
             url: Terabox share URL
             video_quality: Preferred quality (HD Video, Fast Download, etc.)
-        
+            
         Returns:
             Dict with files list containing name, size, and download_url
         """
-        
         # Step 1: Validate URL
         pattern = r"/s/(\w+)|sur1=(\w+)"
         if not re.search(pattern, url):
@@ -48,11 +46,17 @@ class TeraboxAPI:
         # Step 2: Replace domain with 1024tera.com (Z-Mirror method)
         netloc = urlparse(url).netloc
         terabox_url = url.replace(netloc, "1024tera.com")
-        
         logger.info(f"🔄 Converted URL: {terabox_url}")
         
-        # Step 3: Try 4 APIs in order (Z-Mirror + WDZone)
+        # Step 3: Try 5 APIs in order (NEW + Z-Mirror + WDZone)
         apis = [
+            # NEW: Working API added first
+            {
+                "name": "TeraboxAPI_Pro",
+                "url": "https://terabox-dl.qtcloud.workers.dev/api/get-info",
+                "method": "POST",
+                "payload": {"url": url}
+            },
             {
                 "name": "SaveTube",
                 "url": "https://ytshorts.savetube.me/api/v1/terabox-downloader",
@@ -100,7 +104,9 @@ class TeraboxAPI:
                 
                 if response.status_code == 200:
                     data = response.json()
-                    logger.info(f"📄 {api['name']} Response: {data}")
+                    # ENHANCED: Better logging
+                    logger.info(f"📄 {api['name']} Full Response: {data}")
+                    logger.info(f"🔑 Response Keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
                     
                     # Check for error responses
                     if self._is_error_response(data):
@@ -114,7 +120,12 @@ class TeraboxAPI:
                         logger.info(f"✅ SUCCESS with {api['name']}!")
                         return {"files": files}
                     else:
+                        # ENHANCED: Better debugging when no files found
                         logger.warning(f"⚠️ {api['name']}: No files found in response")
+                        logger.warning(f"📊 Response structure: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+                        if isinstance(data, dict) and len(data) > 0:
+                            sample = {k: v for k, v in list(data.items())[:3]}
+                            logger.warning(f"📝 Sample data: {sample}")
                         
             except Exception as e:
                 last_error = str(e)
@@ -125,7 +136,7 @@ class TeraboxAPI:
         error_msg = f"All Terabox APIs failed! Last error: {last_error}"
         logger.error(error_msg)
         raise Exception(error_msg)
-    
+
     def _is_error_response(self, data: Dict) -> bool:
         """Check if response contains error"""
         if isinstance(data, dict):
@@ -138,14 +149,27 @@ class TeraboxAPI:
             if "error" in data:
                 return True
         return False
-    
+
     def _parse_response(self, data: Dict, video_quality: str, api_name: str) -> List[Dict]:
         """Parse API response and extract file info - FIXED FOR ALL FORMATS"""
         files = []
         
         try:
+            # NEW: TeraboxAPI_Pro format
+            if api_name == "TeraboxAPI_Pro":
+                if "ok" in data and data.get("ok") == True:
+                    file_list = data.get("list", [])
+                    for item in file_list:
+                        dlink = item.get("dlink")
+                        if dlink:
+                            files.append({
+                                "name": item.get("filename", "Terabox File"),
+                                "size": format_size(item.get("size", 0)),
+                                "download_url": dlink
+                            })
+            
             # WDZone format (emoji keys)
-            if api_name == "WDZone":
+            elif api_name == "WDZone":
                 if "✅ Status" in data and data["✅ Status"] == "Success":
                     extracted_info = data.get("📜 Extracted Info")
                     if extracted_info and isinstance(extracted_info, list):
@@ -211,7 +235,7 @@ class TeraboxAPI:
             logger.error(f"❌ Error parsing response: {e}")
         
         return files
-    
+
     def _extract_file_info(self, item: Dict, preferred_quality: str) -> Optional[Dict]:
         """Extract file info from a single item"""
         try:
@@ -261,7 +285,6 @@ def extract_terabox_data(url: str) -> Dict:
     api = TeraboxAPI()
     return api.extract_data(url)
 
-
 def format_size(size_input) -> str:
     """
     Format bytes to human readable size
@@ -290,4 +313,4 @@ def format_size(size_input) -> str:
         return f"{size_bytes:.2f} PB"
     except:
         return str(size_input)
-        
+                            
