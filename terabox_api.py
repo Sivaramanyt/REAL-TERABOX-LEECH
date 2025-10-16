@@ -1,5 +1,5 @@
 """
-Terabox API - Using terabox-downloader Library (Correct Package)
+Terabox API - Using terabox-downloader Library (FIXED)
 Requires: pip install terabox-downloader
 """
 
@@ -20,14 +20,11 @@ except ImportError:
 
 class TeraboxAPI:
     def __init__(self):
-        """Initialize with terabox library (requires cookie)"""
+        """Initialize with terabox library"""
         if LIBRARY_AVAILABLE:
             try:
-                # Initialize without cookie (will try direct access)
-                # If cookie is needed, get it from environment variable
-                import os
-                cookie = os.getenv("TERABOX_COOKIE", "lang=en; ndus=default;")
-                self.downloader = TeraboxDL(cookie)
+                # Initialize without cookie (default)
+                self.downloader = TeraboxDL()
                 logger.info("✅ Terabox downloader initialized")
             except Exception as e:
                 logger.error(f"❌ Failed to initialize downloader: {e}")
@@ -40,7 +37,7 @@ class TeraboxAPI:
         Extract Terabox file info using terabox-downloader library
         """
         if not LIBRARY_AVAILABLE or not self.downloader:
-            raise Exception("Terabox library not available. Please ensure terabox-downloader is installed.")
+            raise Exception("Terabox library not available.")
         
         # Validate URL
         pattern = r"/s/(\w+)|surl=(\w+)|terabox|1024tera"
@@ -50,32 +47,73 @@ class TeraboxAPI:
         try:
             logger.info(f"🔍 Extracting from: {url}")
             
-            # Use the library to get file info
-            file_info = self.downloader.get_file_info(url, direct_url=True)
+            # Use the correct method without direct_url parameter
+            file_info = self.downloader.get_file_info(url)
             
             if not file_info:
                 raise Exception("No data returned from Terabox")
             
-            # Check for error in response
-            if "error" in file_info:
-                raise Exception(file_info["error"])
+            logger.info(f"📄 Got file info: {type(file_info)}")
             
-            logger.info(f"📄 Library returned data successfully")
-            
-            # Extract file information
+            # Extract file information based on response structure
             files = []
             
-            download_url = file_info.get("download_link")
-            if download_url:
-                files.append({
-                    "name": file_info.get("file_name", "Terabox File"),
-                    "size": file_info.get("file_size", "Unknown"),
-                    "download_url": download_url
-                })
-                logger.info(f"✅ Found file: {file_info.get('file_name', 'Unknown')}")
+            # Handle dict response
+            if isinstance(file_info, dict):
+                # Check for error
+                if "error" in file_info or file_info.get("errno") != 0:
+                    raise Exception(file_info.get("error") or "Terabox returned an error")
+                
+                # Try different key names for download URL
+                download_url = (file_info.get("download_link") or 
+                               file_info.get("dlink") or 
+                               file_info.get("downloadLink") or
+                               file_info.get("direct_link"))
+                
+                if download_url:
+                    files.append({
+                        "name": (file_info.get("file_name") or 
+                                file_info.get("filename") or 
+                                file_info.get("server_filename") or "Terabox File"),
+                        "size": (file_info.get("file_size") or 
+                                file_info.get("size") or "Unknown"),
+                        "download_url": download_url
+                    })
+                    logger.info(f"✅ Found file: {file_info.get('file_name', 'Unknown')}")
+                else:
+                    # Check if there's a list of files inside
+                    file_list = file_info.get("list", [])
+                    if file_list:
+                        for item in file_list:
+                            dlink = (item.get("dlink") or 
+                                   item.get("download_link") or 
+                                   item.get("downloadLink"))
+                            if dlink:
+                                files.append({
+                                    "name": (item.get("filename") or 
+                                            item.get("server_filename") or 
+                                            item.get("file_name") or "Terabox File"),
+                                    "size": format_size(item.get("size", 0)),
+                                    "download_url": dlink
+                                })
+            
+            # Handle list response
+            elif isinstance(file_info, list):
+                for item in file_info:
+                    download_url = (item.get("dlink") or 
+                                   item.get("download_link") or 
+                                   item.get("downloadLink"))
+                    if download_url:
+                        files.append({
+                            "name": (item.get("filename") or 
+                                    item.get("server_filename") or 
+                                    item.get("file_name") or "Terabox File"),
+                            "size": format_size(item.get("size", 0)),
+                            "download_url": download_url
+                        })
             
             if not files:
-                raise Exception("Could not extract download link from Terabox response")
+                raise Exception("Could not extract download links from response")
             
             logger.info(f"✅ Successfully extracted {len(files)} file(s)")
             return {"files": files}
@@ -115,4 +153,4 @@ def format_size(size_input) -> str:
         return f"{size_bytes:.2f} PB"
     except:
         return str(size_input)
-        
+                                                         
