@@ -1,6 +1,6 @@
 """
 Terabox API - Based on Z-Mirror Implementation + WDZone
-Uses 4 FREE APIs with proper response parsing for all formats
+Uses 7 FREE APIs with proper response parsing for all formats + Enhanced Debugging
 GitHub: https://github.com/Dawn-India/Z-Mirror
 """
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class TeraboxAPI:
     def __init__(self):
-        """Initialize with 4 FREE APIs for maximum reliability"""
+        """Initialize with 7 FREE APIs for maximum reliability"""
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
             "Accept": "application/json, text/plain, */*",
@@ -27,7 +27,7 @@ class TeraboxAPI:
 
     def extract_data(self, url: str, video_quality: str = "HD Video") -> Dict:
         """
-        Extract Terabox file info using 4 fallback APIs
+        Extract Terabox file info using 7 fallback APIs
         
         Args:
             url: Terabox share URL
@@ -48,15 +48,28 @@ class TeraboxAPI:
         terabox_url = url.replace(netloc, "1024tera.com")
         logger.info(f"🔄 Converted URL: {terabox_url}")
         
-        # Step 3: Try 5 APIs in order (NEW + Z-Mirror + WDZone)
+        # Step 3: Try 7 APIs in order (NEW + Z-Mirror + WDZone)
         apis = [
-            # NEW: Working API added first
+            # NEW: Working APIs added first
             {
                 "name": "TeraboxAPI_Pro",
                 "url": "https://terabox-dl.qtcloud.workers.dev/api/get-info",
                 "method": "POST",
                 "payload": {"url": url}
             },
+            {
+                "name": "TeraboxDirect",
+                "url": "https://terabox-downloader.vercel.app/api/download",
+                "method": "POST",
+                "payload": {"url": url}
+            },
+            {
+                "name": "InstantTerabox",
+                "url": "https://instant-terabox-downloader.vercel.app/api/video",
+                "method": "POST", 
+                "payload": {"url": url}
+            },
+            # Original APIs
             {
                 "name": "SaveTube",
                 "url": "https://ytshorts.savetube.me/api/v1/terabox-downloader",
@@ -104,13 +117,17 @@ class TeraboxAPI:
                 
                 if response.status_code == 200:
                     data = response.json()
-                    # ENHANCED: Better logging
+                    
+                    # ENHANCED: Better logging to debug responses
                     logger.info(f"📄 {api['name']} Full Response: {data}")
                     logger.info(f"🔑 Response Keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
                     
                     # Check for error responses
                     if self._is_error_response(data):
-                        logger.warning(f"⚠️ {api['name']}: Error in response - {data}")
+                        logger.warning(f"⚠️ {api['name']}: Error in response")
+                        if isinstance(data, dict) and len(data) > 0:
+                            sample = {k: str(v)[:100] for k, v in list(data.items())[:3]}
+                            logger.warning(f"📝 Error details: {sample}")
                         continue
                     
                     # Parse the response
@@ -120,12 +137,13 @@ class TeraboxAPI:
                         logger.info(f"✅ SUCCESS with {api['name']}!")
                         return {"files": files}
                     else:
-                        # ENHANCED: Better debugging when no files found
+                        # ENHANCED: Show why no files were found
                         logger.warning(f"⚠️ {api['name']}: No files found in response")
-                        logger.warning(f"📊 Response structure: {list(data.keys()) if isinstance(data, dict) else type(data)}")
                         if isinstance(data, dict) and len(data) > 0:
-                            sample = {k: v for k, v in list(data.items())[:3]}
+                            sample = {k: str(v)[:100] for k, v in list(data.items())[:3]}
                             logger.warning(f"📝 Sample data: {sample}")
+                else:
+                    logger.warning(f"❌ {api['name']}: HTTP {response.status_code}")
                         
             except Exception as e:
                 last_error = str(e)
@@ -146,7 +164,9 @@ class TeraboxAPI:
             # Generic error formats
             if "status" in data and data["status"] == "error":
                 return True
-            if "error" in data:
+            if "error" in data and data["error"]:
+                return True
+            if "ok" in data and data["ok"] == False:
                 return True
         return False
 
@@ -167,6 +187,21 @@ class TeraboxAPI:
                                 "size": format_size(item.get("size", 0)),
                                 "download_url": dlink
                             })
+            
+            # NEW: TeraboxDirect & InstantTerabox format
+            elif api_name in ["TeraboxDirect", "InstantTerabox"]:
+                if "downloadLink" in data and data.get("downloadLink"):
+                    files.append({
+                        "name": data.get("fileName", "Terabox File"),
+                        "size": data.get("fileSize", "Unknown"),
+                        "download_url": data["downloadLink"]
+                    })
+                elif "download_link" in data and data.get("download_link"):
+                    files.append({
+                        "name": data.get("file_name", "Terabox File"),
+                        "size": data.get("file_size", "Unknown"),
+                        "download_url": data["download_link"]
+                    })
             
             # WDZone format (emoji keys)
             elif api_name == "WDZone":
@@ -313,4 +348,4 @@ def format_size(size_input) -> str:
         return f"{size_bytes:.2f} PB"
     except:
         return str(size_input)
-                            
+        
