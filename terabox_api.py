@@ -1,321 +1,142 @@
 """
-Terabox API - Based on Z-Mirror Implementation + WDZone
-Uses 7 FREE APIs with proper response parsing for all formats + Enhanced Debugging
-GitHub: https://github.com/Dawn-India/Z-Mirror
+Terabox API - Direct Scraper Method (No Third-Party APIs)
+Works by directly accessing Terabox's internal API
 """
 
 import requests
 import logging
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 from typing import Dict, List, Optional
+import json
 
 logger = logging.getLogger(__name__)
 
 class TeraboxAPI:
     def __init__(self):
-        """Initialize with 7 FREE APIs for maximum reliability"""
+        """Initialize with direct Terabox scraping"""
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Content-Type": "application/json",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin"
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Referer": "https://www.terabox.com/",
+            "Origin": "https://www.terabox.com"
         }
-
+        
     def extract_data(self, url: str, video_quality: str = "HD Video") -> Dict:
         """
-        Extract Terabox file info using 7 fallback APIs
+        Extract Terabox file info using direct Terabox API access
         
         Args:
             url: Terabox share URL
-            video_quality: Preferred quality (HD Video, Fast Download, etc.)
+            video_quality: Preferred quality (not used in direct method)
             
         Returns:
             Dict with files list containing name, size, and download_url
         """
-        # Step 1: Validate URL
-        pattern = r"/s/(\w+)|sur1=(\w+)"
-        if not re.search(pattern, url):
-            raise Exception("ERROR: Invalid terabox URL")
-        
-        logger.info(f"🔍 Extracting from: {url}")
-        
-        # Step 2: Replace domain with 1024tera.com (Z-Mirror method)
-        netloc = urlparse(url).netloc
-        terabox_url = url.replace(netloc, "1024tera.com")
-        logger.info(f"🔄 Converted URL: {terabox_url}")
-        
-        # Step 3: Try 7 APIs in order (NEW + Z-Mirror + WDZone)
-        apis = [
-            # NEW: Working APIs added first
-            {
-                "name": "TeraboxAPI_Pro",
-                "url": "https://terabox-dl.qtcloud.workers.dev/api/get-info",
-                "method": "POST",
-                "payload": {"url": url}
-            },
-            {
-                "name": "TeraboxDirect",
-                "url": "https://terabox-downloader.vercel.app/api/download",
-                "method": "POST",
-                "payload": {"url": url}
-            },
-            {
-                "name": "InstantTerabox",
-                "url": "https://instant-terabox-downloader.vercel.app/api/video",
-                "method": "POST", 
-                "payload": {"url": url}
-            },
-            # Original APIs
-            {
-                "name": "SaveTube",
-                "url": "https://ytshorts.savetube.me/api/v1/terabox-downloader",
-                "method": "POST",
-                "payload": {"url": terabox_url}
-            },
-            {
-                "name": "NepCoderDevs",
-                "url": f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={terabox_url}",
-                "method": "GET",
-                "payload": None
-            },
-            {
-                "name": "UdayScriptsX",
-                "url": f"https://terabox.udayscriptsx.workers.dev/?url={terabox_url}",
-                "method": "GET",
-                "payload": None
-            },
-            {
-                "name": "WDZone",
-                "url": "https://wdzone-terabox-api.vercel.app/api",
-                "method": "POST",
-                "payload": {"url": url}  # WDZone uses original URL
+        try:
+            # Step 1: Extract share ID from URL
+            logger.info(f"🔍 Processing Terabox URL: {url}")
+            
+            # Extract surl parameter
+            if '/s/' in url:
+                surl = url.split('/s/')[-1].split('?')[0]
+            elif 'surl=' in url:
+                surl = parse_qs(urlparse(url).query).get('surl', [''])[0]
+            else:
+                raise Exception("Invalid Terabox URL format")
+            
+            logger.info(f"📋 Share ID (surl): {surl}")
+            
+            # Step 2: Get file list from Terabox API
+            api_url = "https://www.terabox.com/api/shorturlinfo"
+            params = {
+                "shorturl": surl,
+                "root": "1"
             }
-        ]
-        
-        last_error = None
-        
-        for api in apis:
-            try:
-                logger.info(f"🌐 Trying API: {api['name']}")
+            
+            logger.info(f"🌐 Calling Terabox API directly...")
+            response = requests.get(api_url, params=params, headers=self.headers, timeout=30)
+            
+            if response.status_code != 200:
+                raise Exception(f"Terabox API returned status {response.status_code}")
+            
+            data = response.json()
+            logger.info(f"📄 API Response: {json.dumps(data, indent=2)[:500]}...")
+            
+            # Step 3: Check for errors
+            errno = data.get('errno', -1)
+            if errno != 0:
+                error_msg = f"Terabox API error: errno={errno}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+            
+            # Step 4: Extract file information
+            files = []
+            file_list = data.get('list', [])
+            
+            if not file_list:
+                raise Exception("No files found in Terabox link")
+            
+            for item in file_list:
+                # Get direct download link
+                fs_id = item.get('fs_id')
+                dlink = item.get('dlink', '')
                 
-                if api["method"] == "POST":
-                    response = requests.post(
-                        api["url"],
-                        headers=self.headers,
-                        json=api["payload"],
-                        timeout=30
-                    )
-                else:  # GET
-                    response = requests.get(
-                        api["url"],
-                        timeout=30
-                    )
+                if not dlink and fs_id:
+                    # Try to get download link
+                    dlink = self._get_download_link(surl, fs_id)
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    # ENHANCED: Better logging to debug responses
-                    logger.info(f"📄 {api['name']} Full Response: {data}")
-                    logger.info(f"🔑 Response Keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
-                    
-                    # Check for error responses
-                    if self._is_error_response(data):
-                        logger.warning(f"⚠️ {api['name']}: Error in response")
-                        if isinstance(data, dict) and len(data) > 0:
-                            sample = {k: str(v)[:100] for k, v in list(data.items())[:3]}
-                            logger.warning(f"📝 Error details: {sample}")
-                        continue
-                    
-                    # Parse the response
-                    files = self._parse_response(data, video_quality, api["name"])
-                    
-                    if files:
-                        logger.info(f"✅ SUCCESS with {api['name']}!")
-                        return {"files": files}
-                    else:
-                        # ENHANCED: Show why no files were found
-                        logger.warning(f"⚠️ {api['name']}: No files found in response")
-                        if isinstance(data, dict) and len(data) > 0:
-                            sample = {k: str(v)[:100] for k, v in list(data.items())[:3]}
-                            logger.warning(f"📝 Sample data: {sample}")
-                else:
-                    logger.warning(f"❌ {api['name']}: HTTP {response.status_code}")
-                        
-            except Exception as e:
-                last_error = str(e)
-                logger.warning(f"❌ {api['name']} failed: {e}")
-                continue
-        
-        # All APIs failed
-        error_msg = f"All Terabox APIs failed! Last error: {last_error}"
-        logger.error(error_msg)
-        raise Exception(error_msg)
-
-    def _is_error_response(self, data: Dict) -> bool:
-        """Check if response contains error"""
-        if isinstance(data, dict):
-            # WDZone error format
-            if "❌ Status" in data and data["❌ Status"] == "Error":
-                return True
-            # Generic error formats
-            if "status" in data and data["status"] == "error":
-                return True
-            if "error" in data and data["error"]:
-                return True
-            if "ok" in data and data["ok"] == False:
-                return True
-        return False
-
-    def _parse_response(self, data: Dict, video_quality: str, api_name: str) -> List[Dict]:
-        """Parse API response and extract file info - FIXED FOR ALL FORMATS"""
-        files = []
-        
-        try:
-            # NEW: TeraboxAPI_Pro format
-            if api_name == "TeraboxAPI_Pro":
-                if "ok" in data and data.get("ok") == True:
-                    file_list = data.get("list", [])
-                    for item in file_list:
-                        dlink = item.get("dlink")
-                        if dlink:
-                            files.append({
-                                "name": item.get("filename", "Terabox File"),
-                                "size": format_size(item.get("size", 0)),
-                                "download_url": dlink
-                            })
-            
-            # NEW: TeraboxDirect & InstantTerabox format
-            elif api_name in ["TeraboxDirect", "InstantTerabox"]:
-                if "downloadLink" in data and data.get("downloadLink"):
+                if dlink:
                     files.append({
-                        "name": data.get("fileName", "Terabox File"),
-                        "size": data.get("fileSize", "Unknown"),
-                        "download_url": data["downloadLink"]
+                        "name": item.get('server_filename', 'Terabox File'),
+                        "size": format_size(item.get('size', 0)),
+                        "download_url": dlink,
+                        "fs_id": fs_id
                     })
-                elif "download_link" in data and data.get("download_link"):
-                    files.append({
-                        "name": data.get("file_name", "Terabox File"),
-                        "size": data.get("file_size", "Unknown"),
-                        "download_url": data["download_link"]
-                    })
+                    logger.info(f"✅ Found file: {item.get('server_filename')}")
             
-            # WDZone format (emoji keys)
-            elif api_name == "WDZone":
-                if "✅ Status" in data and data["✅ Status"] == "Success":
-                    extracted_info = data.get("📜 Extracted Info")
-                    if extracted_info and isinstance(extracted_info, list):
-                        for item in extracted_info:
-                            download_url = item.get("🔗 Direct Download Link")
-                            if download_url:
-                                files.append({
-                                    "name": item.get("📄 File Name", "Terabox File"),
-                                    "size": item.get("📦 File Size", "Unknown"),
-                                    "download_url": download_url
-                                })
+            if not files:
+                raise Exception("Could not extract download links")
             
-            # NepCoderDevs / UdayScriptsX format (FIXED!)
-            elif api_name in ["NepCoderDevs", "UdayScriptsX"]:
-                # These APIs return: {file_name, direct_link, size, link, thumb, sizebytes}
-                if "direct_link" in data and data.get("direct_link"):
-                    files.append({
-                        "name": data.get("file_name", "Terabox File"),
-                        "size": data.get("size", "Unknown"),
-                        "download_url": data["direct_link"]
-                    })
-                # Fallback to "link" if direct_link not present
-                elif "link" in data and data.get("link"):
-                    files.append({
-                        "name": data.get("file_name", "Terabox File"),
-                        "size": data.get("size", "Unknown"),
-                        "download_url": data["link"]
-                    })
+            logger.info(f"✅ Successfully extracted {len(files)} file(s)")
+            return {"files": files}
             
-            # SaveTube format (response list)
-            elif isinstance(data, dict) and "response" in data:
-                response_data = data["response"]
-                if isinstance(response_data, list):
-                    for item in response_data:
-                        file_info = self._extract_file_info(item, video_quality)
-                        if file_info:
-                            files.append(file_info)
-            
-            # Resolutions format
-            elif isinstance(data, dict) and "resolutions" in data:
-                file_info = self._extract_file_info(data, video_quality)
-                if file_info:
-                    files.append(file_info)
-            
-            # Generic download_url format
-            elif isinstance(data, dict) and "download_url" in data:
-                files.append({
-                    "name": data.get("file_name", "Terabox File"),
-                    "size": data.get("file_size", "Unknown"),
-                    "download_url": data["download_url"]
-                })
-            
-            # Nested data structure
-            elif isinstance(data, dict) and "data" in data:
-                data_content = data["data"]
-                if isinstance(data_content, list):
-                    for item in data_content:
-                        file_info = self._extract_file_info(item, video_quality)
-                        if file_info:
-                            files.append(file_info)
-        
         except Exception as e:
-            logger.error(f"❌ Error parsing response: {e}")
-        
-        return files
-
-    def _extract_file_info(self, item: Dict, preferred_quality: str) -> Optional[Dict]:
-        """Extract file info from a single item"""
+            error_msg = f"Terabox extraction failed: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+    
+    def _get_download_link(self, surl: str, fs_id: str) -> Optional[str]:
+        """Get direct download link for a file"""
         try:
-            # Check if item has resolutions
-            if "resolutions" in item:
-                resolutions = item["resolutions"]
-                
-                # Try to get preferred quality
-                download_url = resolutions.get(preferred_quality)
-                
-                # Fallback to available qualities
-                if not download_url:
-                    for quality in ["HD Video", "Fast Download", "SD Video"]:
-                        download_url = resolutions.get(quality)
-                        if download_url:
-                            break
-                
-                if download_url:
-                    return {
-                        "name": item.get("title", "Terabox File"),
-                        "size": item.get("size", "Unknown"),
-                        "download_url": download_url
-                    }
+            api_url = "https://www.terabox.com/api/download"
+            params = {
+                "surl": surl,
+                "fid_list": f"[{fs_id}]"
+            }
             
-            # Direct URL in item
-            elif "url" in item:
-                return {
-                    "name": item.get("title") or item.get("filename", "Terabox File"),
-                    "size": item.get("size", "Unknown"),
-                    "download_url": item["url"]
-                }
-        
+            response = requests.get(api_url, params=params, headers=self.headers, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('errno') == 0:
+                    dlink = data.get('dlink', '')
+                    if dlink:
+                        return dlink
         except Exception as e:
-            logger.error(f"❌ Error extracting file info: {e}")
+            logger.warning(f"Could not get download link: {e}")
         
         return None
 
 
 # ===== BACKWARD COMPATIBILITY FUNCTIONS =====
-# These allow old code to still work with new class structure
 
 def extract_terabox_data(url: str) -> Dict:
     """
-    Backward compatibility wrapper for old imports
-    Usage: from terabox_api import extract_terabox_data
+    Backward compatibility wrapper
     """
     api = TeraboxAPI()
     return api.extract_data(url)
@@ -323,23 +144,19 @@ def extract_terabox_data(url: str) -> Dict:
 def format_size(size_input) -> str:
     """
     Format bytes to human readable size
-    Handles both int and string inputs (e.g., "18.08 MB")
     """
     try:
-        # If it's already a formatted string (e.g., "125 MB"), return as-is
+        # If it's already a formatted string, return as-is
         if isinstance(size_input, str):
             if any(unit in size_input.upper() for unit in ['B', 'KB', 'MB', 'GB', 'TB']):
                 return size_input
-            # Try to convert string to int
             try:
                 size_input = int(size_input)
             except:
                 return str(size_input)
         
-        # Convert to int
         size_bytes = int(size_input)
         
-        # Format to human readable
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
             if size_bytes < 1024.0:
                 return f"{size_bytes:.2f} {unit}"
@@ -348,4 +165,4 @@ def format_size(size_input) -> str:
         return f"{size_bytes:.2f} PB"
     except:
         return str(size_input)
-        
+            
