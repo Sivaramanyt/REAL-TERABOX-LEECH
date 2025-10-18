@@ -1,7 +1,8 @@
 """
-Terabox API - Based on Z-Mirror Implementation + WDZone + Manual Cookie Method
-Uses 4 FREE APIs + Manual cookie-based fallback for maximum reliability
+Terabox API - Based on Z-Mirror Implementation + WDZone + TeraDL
+Uses 4 FREE APIs + TeraDL API (Most Starred - 150 stars) for maximum reliability
 GitHub: https://github.com/Dawn-India/Z-Mirror
+TeraDL: https://github.com/Dapunta/TeraDL
 """
 import requests
 import logging
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class TeraboxAPI:
     def __init__(self):
-        """Initialize with 4 FREE APIs for maximum reliability"""
+        """Initialize with 5 APIs for maximum reliability"""
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
             "Accept": "application/json, text/plain, */*",
@@ -27,7 +28,7 @@ class TeraboxAPI:
         
     def extract_data(self, url: str, video_quality: str = "HD Video") -> Dict:
         """
-        Extract Terabox file info using 4 APIs + Manual Cookie fallback
+        Extract Terabox file info using 4 APIs + TeraDL (Most Reliable)
         Args:
             url: Terabox share URL
             video_quality: Preferred quality (HD Video, Fast Download, etc.)
@@ -112,66 +113,74 @@ class TeraboxAPI:
                 logger.warning(f"❌ {api['name']} failed: {e}")
                 continue
         
-        # NEW: Try manual cookie-based method as final fallback (Pure requests)
+        # NEW: Try TeraDL API as final fallback (Most Reliable - 150 stars!)
         try:
-            logger.info("🍪 Trying Cookie-based method (Manual Implementation)")
-            from config import TERABOX_COOKIE
+            logger.info("🌟 Trying TeraDL API (Dapunta - Most Starred & Reliable)")
             
-            if TERABOX_COOKIE:
-                # Parse cookies from string to dict
-                cookie_dict = {}
-                for item in TERABOX_COOKIE.split(';'):
-                    if '=' in item and item.strip():
-                        key, value = item.strip().split('=', 1)
-                        cookie_dict[key.strip()] = value.strip()
+            teradl_url = "https://teradl.dapuntaratya.com/api"
+            
+            payload = {
+                "url": url  # Use original URL
+            }
+            
+            teradl_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+            
+            response = requests.post(teradl_url, json=payload, headers=teradl_headers, timeout=30)
+            
+            logger.info(f"📡 TeraDL Status Code: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"📄 TeraDL Response: {data}")
                 
-                # Extract shorturl from the terabox URL
-                shorturl_match = re.search(r'/s/(\w+)', url)
-                if not shorturl_match:
-                    raise Exception("Could not extract shorturl from URL")
-                shorturl = shorturl_match.group(1)
+                # Parse TeraDL response - flexible parsing for different formats
+                download_url = None
+                file_name = "Terabox File"
+                file_size = "Unknown"
                 
-                # Make API request with cookies (Terabox official API)
-                api_url = f"https://www.terabox.com/share/list?shorturl={shorturl}&root=1"
-                
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'application/json, text/plain, */*',
-                    'Referer': url,
-                    'Origin': 'https://www.terabox.com'
-                }
-                
-                response = requests.get(api_url, headers=headers, cookies=cookie_dict, timeout=30)
-                
-                if response.status_code == 200:
-                    data = response.json()
+                # Try different response structures
+                if isinstance(data, dict):
+                    # Format 1: {status: success, data: {...}}
+                    if data.get('status') == 'success' and 'data' in data:
+                        file_data = data['data']
+                        download_url = file_data.get('download_url') or file_data.get('url') or file_data.get('dlink')
+                        file_name = file_data.get('file_name') or file_data.get('filename') or file_data.get('title', 'Terabox File')
+                        file_size = file_data.get('size') or file_data.get('filesize', 'Unknown')
                     
-                    if data.get('errno') == 0 and 'list' in data:
-                        file_list = data['list']
-                        if file_list and len(file_list) > 0:
-                            file_info = file_list[0]
-                            
-                            # Get download link
-                            fs_id = file_info.get('fs_id')
-                            if fs_id:
-                                download_url = f"https://www.terabox.com/share/download?shorturl={shorturl}&fid={fs_id}"
-                                
-                                logger.info("✅ SUCCESS with Cookie method!")
-                                return {
-                                    "files": [{
-                                        "name": file_info.get('server_filename', 'Terabox File'),
-                                        "size": self._format_size(file_info.get('size', 0)),
-                                        "download_url": download_url
-                                    }]
-                                }
+                    # Format 2: Direct data without status wrapper
+                    elif 'download_url' in data or 'url' in data or 'dlink' in data:
+                        download_url = data.get('download_url') or data.get('url') or data.get('dlink')
+                        file_name = data.get('file_name') or data.get('filename') or data.get('title', 'Terabox File')
+                        file_size = data.get('size') or data.get('filesize', 'Unknown')
+                    
+                    # Format 3: {result: {...}}
+                    elif 'result' in data:
+                        result = data['result']
+                        download_url = result.get('download_url') or result.get('url') or result.get('dlink')
+                        file_name = result.get('file_name') or result.get('filename') or result.get('title', 'Terabox File')
+                        file_size = result.get('size') or result.get('filesize', 'Unknown')
                 
-                logger.warning("⚠️ Cookie method: No valid data in response")
+                if download_url:
+                    logger.info("✅ SUCCESS with TeraDL API!")
+                    return {
+                        "files": [{
+                            "name": file_name,
+                            "size": self._format_size(file_size) if isinstance(file_size, int) else file_size,
+                            "download_url": download_url
+                        }]
+                    }
+                else:
+                    logger.warning("⚠️ TeraDL API: No download URL found in response")
             else:
-                logger.warning("⚠️ TERABOX_COOKIE not configured")
+                logger.warning(f"⚠️ TeraDL API returned status {response.status_code}")
                 
         except Exception as e:
             last_error = str(e)
-            logger.warning(f"❌ Cookie method failed: {e}")
+            logger.warning(f"❌ TeraDL API failed: {e}")
         
         # All methods failed
         error_msg = f"All Terabox methods failed! Last error: {last_error}"
@@ -347,4 +356,4 @@ def format_size(size_input) -> str:
         return f"{size_bytes:.2f} PB"
     except:
         return str(size_input)
-    
+            
