@@ -1,7 +1,6 @@
 """
 Configuration file for Terabox Leech Bot with Universal Shortlinks & Auto-Forward & Random Videos
 """
-
 import os
 from dotenv import load_dotenv
 
@@ -16,25 +15,28 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 MONGODB_URL = os.getenv("MONGODB_URL")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "terabox_bot")
 
+# ========== NEW: TERABOX COOKIE AUTHENTICATION ==========
+TERABOX_COOKIE = os.getenv("TERABOX_COOKIE", "")  # Cookie-based method for when APIs fail
+
 # AUTO-FORWARD CONFIGURATION
-BACKUP_CHANNEL_ID = int(os.getenv("BACKUP_CHANNEL_ID", "0")) # Your channel ID
+BACKUP_CHANNEL_ID = int(os.getenv("BACKUP_CHANNEL_ID", "0"))  # Your channel ID
 AUTO_FORWARD_ENABLED = os.getenv("AUTO_FORWARD_ENABLED", "True").lower() == "true"
 
 # UNIVERSAL SHORTLINK CONFIGURATION 💰
-SHORTLINK_API = os.getenv("SHORTLINK_API") # Your API key
-SHORTLINK_URL = os.getenv("SHORTLINK_URL") # Your service URL
+SHORTLINK_API = os.getenv("SHORTLINK_API")  # Your API key
+SHORTLINK_URL = os.getenv("SHORTLINK_URL")  # Your service URL
 
 # Verification Configuration
 VERIFY_TUTORIAL = os.getenv("VERIFY_TUTORIAL", "https://youtube.com/watch?v=example")
 
 # Bot Settings
 FREE_LEECH_LIMIT = int(os.getenv("FREE_LEECH_LIMIT", "3"))
-VERIFY_TOKEN_TIMEOUT = int(os.getenv("VERIFY_TOKEN_TIMEOUT", "43200")) # 1 hour
+VERIFY_TOKEN_TIMEOUT = int(os.getenv("VERIFY_TOKEN_TIMEOUT", "43200"))  # 1 hour
 
 # ========== NEW: VIDEO FEATURE CONFIGURATION ==========
-VIDEO_STORAGE_CHANNEL = int(os.getenv("VIDEO_STORAGE_CHANNEL", "0")) # Your private channel ID for videos
-FREE_VIDEO_LIMIT = int(os.getenv("FREE_VIDEO_LIMIT", "3")) # Same as leech limit
-VIDEO_VERIFY_TOKEN_TIMEOUT = int(os.getenv("VIDEO_VERIFY_TOKEN_TIMEOUT", "43200")) # ✅ NEW: 6 hours (21600 seconds)
+VIDEO_STORAGE_CHANNEL = int(os.getenv("VIDEO_STORAGE_CHANNEL", "0"))  # Your private channel ID for videos
+FREE_VIDEO_LIMIT = int(os.getenv("FREE_VIDEO_LIMIT", "3"))  # Same as leech limit
+VIDEO_VERIFY_TOKEN_TIMEOUT = int(os.getenv("VIDEO_VERIFY_TOKEN_TIMEOUT", "43200"))  # ✅ NEW: 6 hours (21600 seconds)
 
 # Messages
 START_MESSAGE = """
@@ -70,7 +72,6 @@ VERIFICATION_MESSAGE = """
 🔒 **Verification Required!**
 
 You have used all your free attempts ({limit}).
-
 To continue using the bot, please verify your account.
 
 **How to verify:**
@@ -79,7 +80,6 @@ To continue using the bot, please verify your account.
 3. Come back and try again
 
 🔗 **Verification Link:** {verify_link}
-
 📺 **Tutorial:** {tutorial}
 
 ⏰ This verification link expires in 1 hour.
@@ -95,7 +95,6 @@ VERIFIED_MESSAGE = """
 🎉 Congratulations! Your account has been verified.
 
 🚀 You now have unlimited access to the bot.
-
 Use /leech to start downloading files!
 
 💰 **Thank you for supporting us through verification!**
@@ -108,7 +107,6 @@ FORWARD_CAPTION_TEMPLATE = """
 👤 **User:** {user_name} (@{username})
 🆔 **User ID:** {user_id}
 📅 **Date:** {date}
-
 🔗 **Original Link:** {original_link}
 
 📊 **User Stats:** {total_attempts} total attempts
@@ -139,3 +137,4 @@ print(f"🌐 Shortlinks: {'Enabled' if SHORTLINK_API else 'Disabled'}")
 print(f"📢 Auto-Forward: {'Enabled' if AUTO_FORWARD_ENABLED else 'Disabled'}")
 print(f"💰 Monetization: {'Active' if SHORTLINK_API and SHORTLINK_URL else 'Inactive'}")
 print(f"🎬 Random Videos: {'Configured' if VIDEO_STORAGE_CHANNEL else 'Not configured'}")
+print(f"🍪 Cookie Method: {'Enabled' if TERABOX_COOKIE else 'Disabled (API-only)'}")
