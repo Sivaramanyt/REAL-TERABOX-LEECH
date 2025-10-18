@@ -1,247 +1,214 @@
 """
-Terabox API - Based on Working Telegram Bots (@teranr4bot method)
-Uses 4 FREE APIs + TeraDL + NDUS Cookie (r0ld3x method) for maximum reliability
-GitHub: https://github.com/r0ld3x/terabox-downloader-bot
+Terabox API - Based on SudoR2spr's Working Method (June 2025)
+GitHub: https://github.com/SudoR2spr/Terabox-API
+This method scrapes tokens from HTML and uses official Terabox API
 """
 import requests
 import logging
 import re
 import json
-from urllib.parse import urlparse
+import time
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 class TeraboxAPI:
     def __init__(self):
-        """Initialize with multiple methods for maximum reliability"""
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Content-Type": "application/json",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin"
+        """Initialize with SudoR2spr's working cookies and config"""
+        # Working cookies from SudoR2spr (updated June 23, 2025)
+        self.cookies = {
+            'ndus': 'Y-wWXKyteHuigAhC03Fr4bbee-QguZ4JC6UAdqap',
+            'browserid': 'veWFJBJ9hgVgY0eI9S7yzv66aE28f3als3qUXadSjEuICKF1WWBh4inG3KAWJsAYMkAFpH2FuNUum87q',
+            'csrfToken': 'wlv_WNcWCjBtbNQDrHSnut2h',
+            'lang': 'en'
         }
+        
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.1024tera.com/',
+            'Origin': 'https://www.1024tera.com'
+        }
+        
+        self.max_retries = 3
+        self.retry_delay = 2
         
     def extract_data(self, url: str, video_quality: str = "HD Video") -> Dict:
         """
-        Extract Terabox file info using multiple methods
+        Extract Terabox file info using SudoR2spr's method
         Args:
             url: Terabox share URL
-            video_quality: Preferred quality (HD Video, Fast Download, etc.)
+            video_quality: Preferred quality (not used in this method)
         Returns:
             Dict with files list containing name, size, and download_url
         """
-        # Step 1: Validate URL
-        pattern = r"/s/(\w+)|sur1=(\w+)"
-        if not re.search(pattern, url):
-            raise Exception("ERROR: Invalid terabox URL")
         logger.info(f"🔍 Extracting from: {url}")
         
-        # Step 2: Replace domain with 1024tera.com (Z-Mirror method)
-        netloc = urlparse(url).netloc
-        terabox_url = url.replace(netloc, "1024tera.com")
-        logger.info(f"🔄 Converted URL: {terabox_url}")
+        # Step 1: Convert to 1024tera.com domain
+        url = self._convert_url(url)
+        logger.info(f"🔄 Converted URL: {url}")
         
-        # Step 3: Try 4 APIs in order
-        apis = [
-            {
-                "name": "SaveTube",
-                "url": "https://ytshorts.savetube.me/api/v1/terabox-downloader",
-                "method": "POST",
-                "payload": {"url": terabox_url}
-            },
-            {
-                "name": "NepCoderDevs",
-                "url": f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={terabox_url}",
-                "method": "GET",
-                "payload": None
-            },
-            {
-                "name": "UdayScriptsX",
-                "url": f"https://terabox.udayscriptsx.workers.dev/?url={terabox_url}",
-                "method": "GET",
-                "payload": None
-            },
-            {
-                "name": "WDZone",
-                "url": "https://wdzone-terabox-api.vercel.app/api",
-                "method": "POST",
-                "payload": {"url": url}
-            }
+        # Step 2: Extract shorturl from URL
+        shorturl = self._extract_shorturl(url)
+        if not shorturl:
+            raise Exception("Could not extract shorturl from URL")
+        
+        logger.info(f"🔑 Shorturl: {shorturl}")
+        
+        # Step 3: Get HTML page and extract tokens
+        logger.info("📄 Fetching page to extract tokens...")
+        tokens = self._extract_tokens_from_html(url)
+        
+        if not tokens:
+            raise Exception("Failed to extract tokens from page")
+        
+        logger.info(f"✅ Extracted tokens: jsToken={tokens['jsToken'][:20]}..., logid={tokens['logid']}")
+        
+        # Step 4: Call Terabox API with tokens
+        logger.info("🌐 Calling Terabox API...")
+        files = self._get_file_list(shorturl, tokens)
+        
+        if files:
+            logger.info(f"✅ SUCCESS! Found {len(files)} file(s)")
+            return {"files": files}
+        else:
+            raise Exception("No files found in response")
+    
+    def _convert_url(self, url: str) -> str:
+        """Convert any Terabox domain to 1024tera.com"""
+        supported_domains = [
+            'terabox.com', '1024terabox.com', 'teraboxapp.com',
+            'teraboxlink.com', 'terasharelink.com', 'terafileshare.com',
+            'teraboxdrive.com', 'dubox.com', '1024tera.cn'
         ]
         
-        last_error = None
-        for api in apis:
+        parsed = urlparse(url)
+        domain = parsed.netloc.replace('www.', '')
+        
+        if domain in supported_domains or '1024tera.com' in domain:
+            # Replace domain with 1024tera.com
+            return url.replace(parsed.netloc, '1024tera.com')
+        
+        return url
+    
+    def _extract_shorturl(self, url: str) -> Optional[str]:
+        """Extract shorturl from Terabox URL"""
+        patterns = [
+            r'/s/([A-Za-z0-9_-]+)',
+            r'/sharing/link\?surl=([A-Za-z0-9_-]+)',
+            r'surl=([A-Za-z0-9_-]+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        
+        return None
+    
+    def _extract_tokens_from_html(self, url: str) -> Optional[Dict]:
+        """Extract jsToken and logid from HTML page"""
+        try:
+            response = requests.get(url, headers=self.headers, cookies=self.cookies, timeout=30)
+            
+            if response.status_code != 200:
+                logger.warning(f"⚠️ HTML fetch returned status {response.status_code}")
+                return None
+            
+            html = response.text
+            
+            # Extract jsToken
+            js_token_match = re.search(r'window\.jsToken\s*=\s*"([^"]+)"', html)
+            if not js_token_match:
+                js_token_match = re.search(r'jsToken":\s*"([^"]+)"', html)
+            
+            # Extract logid
+            logid_match = re.search(r'logid":\s*"([^"]+)"', html)
+            if not logid_match:
+                logid_match = re.search(r'window\.logid\s*=\s*"([^"]+)"', html)
+            
+            if js_token_match and logid_match:
+                return {
+                    'jsToken': js_token_match.group(1),
+                    'logid': logid_match.group(1)
+                }
+            else:
+                logger.warning("⚠️ Could not extract tokens from HTML")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error extracting tokens: {e}")
+            return None
+    
+    def _get_file_list(self, shorturl: str, tokens: Dict) -> List[Dict]:
+        """Get file list from Terabox API using tokens"""
+        api_url = "https://www.1024tera.com/share/list"
+        
+        params = {
+            'shorturl': shorturl,
+            'root': '1',
+            'jsToken': tokens['jsToken'],
+            'web': '1',
+            'channel': 'dubox',
+            'app_id': '250528',
+            'clienttype': '0'
+        }
+        
+        # Add cookies to headers
+        headers = self.headers.copy()
+        
+        for attempt in range(self.max_retries):
             try:
-                logger.info(f"🌐 Trying API: {api['name']}")
-                if api["method"] == "POST":
-                    response = requests.post(
-                        api["url"],
-                        headers=self.headers,
-                        json=api["payload"],
-                        timeout=30
-                    )
-                else:
-                    response = requests.get(
-                        api["url"],
-                        timeout=30
-                    )
-                    
+                logger.info(f"🔄 API attempt {attempt + 1}/{self.max_retries}")
+                
+                response = requests.get(
+                    api_url,
+                    params=params,
+                    headers=headers,
+                    cookies=self.cookies,
+                    timeout=30
+                )
+                
                 if response.status_code == 200:
                     data = response.json()
-                    logger.info(f"📄 {api['name']} Response: {data}")
                     
-                    if self._is_error_response(data):
-                        logger.warning(f"⚠️ {api['name']}: Error in response")
-                        continue
+                    errno = data.get('errno', -1)
+                    logger.info(f"📡 API Response: errno={errno}")
                     
-                    files = self._parse_response(data, video_quality, api["name"])
-                    if files:
-                        logger.info(f"✅ SUCCESS with {api['name']}!")
-                        return {"files": files}
-                    else:
-                        logger.warning(f"⚠️ {api['name']}: No files found")
+                    if errno == 0:
+                        file_list = data.get('list', [])
                         
-            except Exception as e:
-                last_error = str(e)
-                logger.warning(f"❌ {api['name']} failed: {e}")
-                continue
-        
-        # NEW: NDUS Cookie Method (Used by @teranr4bot and working bots)
-        try:
-            logger.info("🔐 Trying NDUS Cookie Method (Working Bots Method)")
-            from config import TERABOX_COOKIE
-            
-            if TERABOX_COOKIE:
-                # Extract ndus value from cookie string
-                ndus_value = None
-                
-                # Handle different cookie formats
-                if 'ndus=' in TERABOX_COOKIE:
-                    for item in TERABOX_COOKIE.split(';'):
-                        if 'ndus=' in item:
-                            ndus_value = item.split('ndus=')[1].strip()
-                            break
-                elif '=' not in TERABOX_COOKIE:
-                    # Assume it's just the ndus value itself
-                    ndus_value = TERABOX_COOKIE.strip()
-                
-                if ndus_value:
-                    logger.info(f"🔑 Using NDUS token: {ndus_value[:20]}...")
-                    
-                    # Extract shorturl from the Terabox URL
-                    shorturl_match = re.search(r'/s/(\w+)', url)
-                    if not shorturl_match:
-                        raise Exception("Could not extract shorturl from URL")
-                    
-                    shorturl = shorturl_match.group(1)
-                    
-                    # Use official Terabox API (same as working bots)
-                    api_url = f"https://www.terabox.com/api/shorturlinfo?shorturl={shorturl}&root=1"
-                    
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                        'Accept': 'application/json, text/plain, */*',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Cookie': f'ndus={ndus_value}',
-                        'Referer': url
-                    }
-                    
-                    response = requests.get(api_url, headers=headers, timeout=30)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        logger.info(f"📡 NDUS API Response: errno={data.get('errno')}")
-                        
-                        if data.get('errno') == 0:
-                            file_list = data.get('list', [])
-                            
-                            if file_list and len(file_list) > 0:
-                                file_info = file_list[0]
-                                
-                                # Get direct download link
+                        if file_list:
+                            files = []
+                            for file_info in file_list:
+                                # Get download link
                                 dlink = file_info.get('dlink', '')
                                 
                                 if dlink:
-                                    logger.info("✅ SUCCESS with NDUS Cookie Method!")
-                                    return {
-                                        "files": [{
-                                            "name": file_info.get('server_filename', 'Terabox File'),
-                                            "size": self._format_size(file_info.get('size', 0)),
-                                            "download_url": dlink
-                                        }]
-                                    }
-                                else:
-                                    logger.warning("⚠️ NDUS: No download link in response")
-                            else:
-                                logger.warning("⚠️ NDUS: Empty file list")
+                                    files.append({
+                                        'name': file_info.get('server_filename', 'Terabox File'),
+                                        'size': self._format_size(file_info.get('size', 0)),
+                                        'download_url': dlink
+                                    })
+                            
+                            return files
                         else:
-                            logger.warning(f"⚠️ NDUS API returned errno: {data.get('errno')}")
+                            logger.warning("⚠️ Empty file list in response")
                     else:
-                        logger.warning(f"⚠️ NDUS API returned status {response.status_code}")
-                else:
-                    logger.warning("⚠️ Could not extract ndus value from TERABOX_COOKIE")
-            else:
-                logger.warning("⚠️ TERABOX_COOKIE not configured")
+                        logger.warning(f"⚠️ API returned errno: {errno}")
                 
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"❌ NDUS Cookie method failed: {e}")
+                # Rate limit - wait before retry
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay)
+                    
+            except Exception as e:
+                logger.error(f"❌ API call error: {e}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay)
         
-        # Try TeraDL API as additional fallback
-        try:
-            logger.info("🌟 Trying TeraDL API (Fallback)")
-            
-            teradl_url = "https://teradl.dapuntaratya.com/api"
-            payload = {"url": url}
-            
-            teradl_headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            }
-            
-            response = requests.post(teradl_url, json=payload, headers=teradl_headers, timeout=30)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                download_url = None
-                file_name = "Terabox File"
-                file_size = "Unknown"
-                
-                if isinstance(data, dict):
-                    if data.get('status') == 'success' and 'data' in data:
-                        file_data = data['data']
-                        download_url = file_data.get('download_url') or file_data.get('url') or file_data.get('dlink')
-                        file_name = file_data.get('file_name') or file_data.get('filename') or file_data.get('title', 'Terabox File')
-                        file_size = file_data.get('size') or file_data.get('filesize', 'Unknown')
-                    elif 'download_url' in data or 'url' in data or 'dlink' in data:
-                        download_url = data.get('download_url') or data.get('url') or data.get('dlink')
-                        file_name = data.get('file_name') or data.get('filename') or data.get('title', 'Terabox File')
-                        file_size = data.get('size') or data.get('filesize', 'Unknown')
-                
-                if download_url:
-                    logger.info("✅ SUCCESS with TeraDL API!")
-                    return {
-                        "files": [{
-                            "name": file_name,
-                            "size": self._format_size(file_size) if isinstance(file_size, int) else file_size,
-                            "download_url": download_url
-                        }]
-                    }
-                        
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"❌ TeraDL API failed: {e}")
-        
-        # All methods failed
-        error_msg = f"All Terabox methods failed! Last error: {last_error}"
-        logger.error(error_msg)
-        raise Exception(error_msg)
+        return []
     
     def _format_size(self, size_bytes):
         """Format bytes to human readable size"""
@@ -254,114 +221,9 @@ class TeraboxAPI:
             return f"{size_bytes:.2f} PB"
         except:
             return "Unknown"
-    
-    def _is_error_response(self, data: Dict) -> bool:
-        """Check if response contains error"""
-        if isinstance(data, dict):
-            if "❌ Status" in data and data["❌ Status"] == "Error":
-                return True
-            if "status" in data and data["status"] == "error":
-                return True
-            if "error" in data:
-                return True
-        return False
-    
-    def _parse_response(self, data: Dict, video_quality: str, api_name: str) -> List[Dict]:
-        """Parse API response and extract file info"""
-        files = []
-        try:
-            # WDZone format
-            if api_name == "WDZone":
-                if "✅ Status" in data and data["✅ Status"] == "Success":
-                    extracted_info = data.get("📜 Extracted Info")
-                    if extracted_info and isinstance(extracted_info, list):
-                        for item in extracted_info:
-                            download_url = item.get("🔗 Direct Download Link")
-                            if download_url:
-                                files.append({
-                                    "name": item.get("📄 File Name", "Terabox File"),
-                                    "size": item.get("📦 File Size", "Unknown"),
-                                    "download_url": download_url
-                                })
-            
-            # NepCoderDevs / UdayScriptsX format
-            elif api_name in ["NepCoderDevs", "UdayScriptsX"]:
-                if "direct_link" in data and data.get("direct_link"):
-                    files.append({
-                        "name": data.get("file_name", "Terabox File"),
-                        "size": data.get("size", "Unknown"),
-                        "download_url": data["direct_link"]
-                    })
-                elif "link" in data and data.get("link"):
-                    files.append({
-                        "name": data.get("file_name", "Terabox File"),
-                        "size": data.get("size", "Unknown"),
-                        "download_url": data["link"]
-                    })
-            
-            # SaveTube format
-            elif isinstance(data, dict) and "response" in data:
-                response_data = data["response"]
-                if isinstance(response_data, list):
-                    for item in response_data:
-                        file_info = self._extract_file_info(item, video_quality)
-                        if file_info:
-                            files.append(file_info)
-            
-            # Generic formats
-            elif isinstance(data, dict):
-                if "resolutions" in data:
-                    file_info = self._extract_file_info(data, video_quality)
-                    if file_info:
-                        files.append(file_info)
-                elif "download_url" in data:
-                    files.append({
-                        "name": data.get("file_name", "Terabox File"),
-                        "size": data.get("file_size", "Unknown"),
-                        "download_url": data["download_url"]
-                    })
-                elif "data" in data and isinstance(data["data"], list):
-                    for item in data["data"]:
-                        file_info = self._extract_file_info(item, video_quality)
-                        if file_info:
-                            files.append(file_info)
-                            
-        except Exception as e:
-            logger.error(f"❌ Error parsing response: {e}")
-            
-        return files
-    
-    def _extract_file_info(self, item: Dict, preferred_quality: str) -> Optional[Dict]:
-        """Extract file info from a single item"""
-        try:
-            if "resolutions" in item:
-                resolutions = item["resolutions"]
-                download_url = resolutions.get(preferred_quality)
-                if not download_url:
-                    for quality in ["HD Video", "Fast Download", "SD Video"]:
-                        download_url = resolutions.get(quality)
-                        if download_url:
-                            break
-                            
-                if download_url:
-                    return {
-                        "name": item.get("title", "Terabox File"),
-                        "size": item.get("size", "Unknown"),
-                        "download_url": download_url
-                    }
-            
-            elif "url" in item:
-                return {
-                    "name": item.get("title") or item.get("filename", "Terabox File"),
-                    "size": item.get("size", "Unknown"),
-                    "download_url": item["url"]
-                }
-                
-        except Exception as e:
-            logger.error(f"❌ Error extracting file info: {e}")
-        return None
 
-# Backward compatibility functions
+# ===== BACKWARD COMPATIBILITY FUNCTIONS =====
+
 def extract_terabox_data(url: str) -> Dict:
     """Backward compatibility wrapper"""
     api = TeraboxAPI()
