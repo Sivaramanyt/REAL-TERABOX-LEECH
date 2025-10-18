@@ -3,12 +3,11 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies including FFmpeg, FFprobe, wget, and git
+# Install system dependencies including FFmpeg, FFprobe, and wget
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg \
     wget \
-    git \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
