@@ -1,21 +1,15 @@
 """
-Terabox API - Based on Z-Mirror Implementation + WDZone + Cookie Method
-Uses 4 FREE APIs + Cookie-based fallback for maximum reliability
+Terabox API - Based on Z-Mirror Implementation + WDZone + Manual Cookie Method
+Uses 4 FREE APIs + Manual cookie-based fallback for maximum reliability
 GitHub: https://github.com/Dawn-India/Z-Mirror
 """
 import requests
 import logging
 import re
+import json
 from urllib.parse import urlparse
 from typing import Dict, List, Optional
 
-# NEW: Cookie-based fallback method
-try:
-    from terabox_downloader import TeraboxDL
-    COOKIE_METHOD_AVAILABLE = True
-except ImportError:
-    COOKIE_METHOD_AVAILABLE = False
-    
 logger = logging.getLogger(__name__)
 
 class TeraboxAPI:
@@ -33,7 +27,7 @@ class TeraboxAPI:
         
     def extract_data(self, url: str, video_quality: str = "HD Video") -> Dict:
         """
-        Extract Terabox file info using 4 APIs + Cookie fallback
+        Extract Terabox file info using 4 APIs + Manual Cookie fallback
         Args:
             url: Terabox share URL
             video_quality: Preferred quality (HD Video, Fast Download, etc.)
@@ -118,37 +112,83 @@ class TeraboxAPI:
                 logger.warning(f"❌ {api['name']} failed: {e}")
                 continue
         
-        # NEW: Try cookie-based method as final fallback
-        if COOKIE_METHOD_AVAILABLE:
-            try:
-                logger.info("🍪 Trying Cookie-based method (Fallback)")
-                from config import TERABOX_COOKIE
+        # NEW: Try manual cookie-based method as final fallback (Pure requests)
+        try:
+            logger.info("🍪 Trying Cookie-based method (Manual Implementation)")
+            from config import TERABOX_COOKIE
+            
+            if TERABOX_COOKIE:
+                # Parse cookies from string to dict
+                cookie_dict = {}
+                for item in TERABOX_COOKIE.split(';'):
+                    if '=' in item and item.strip():
+                        key, value = item.strip().split('=', 1)
+                        cookie_dict[key.strip()] = value.strip()
                 
-                if TERABOX_COOKIE:
-                    tb = TeraboxDL(TERABOX_COOKIE)
-                    file_info = tb.get_file_info(url)
+                # Extract shorturl from the terabox URL
+                shorturl_match = re.search(r'/s/(\w+)', url)
+                if not shorturl_match:
+                    raise Exception("Could not extract shorturl from URL")
+                shorturl = shorturl_match.group(1)
+                
+                # Make API request with cookies (Terabox official API)
+                api_url = f"https://www.terabox.com/share/list?shorturl={shorturl}&root=1"
+                
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Referer': url,
+                    'Origin': 'https://www.terabox.com'
+                }
+                
+                response = requests.get(api_url, headers=headers, cookies=cookie_dict, timeout=30)
+                
+                if response.status_code == 200:
+                    data = response.json()
                     
-                    if file_info and file_info.get('download_link'):
-                        logger.info("✅ SUCCESS with Cookie method!")
-                        return {
-                            "files": [{
-                                "name": file_info.get('file_name', 'Terabox File'),
-                                "size": file_info.get('file_size', 'Unknown'),
-                                "download_url": file_info['download_link']
-                            }]
-                        }
-                else:
-                    logger.warning("⚠️ TERABOX_COOKIE not configured")
-            except Exception as e:
-                last_error = str(e)
-                logger.warning(f"❌ Cookie method failed: {e}")
-        else:
-            logger.warning("⚠️ Cookie method not available (terabox-downloader not installed)")
+                    if data.get('errno') == 0 and 'list' in data:
+                        file_list = data['list']
+                        if file_list and len(file_list) > 0:
+                            file_info = file_list[0]
+                            
+                            # Get download link
+                            fs_id = file_info.get('fs_id')
+                            if fs_id:
+                                download_url = f"https://www.terabox.com/share/download?shorturl={shorturl}&fid={fs_id}"
+                                
+                                logger.info("✅ SUCCESS with Cookie method!")
+                                return {
+                                    "files": [{
+                                        "name": file_info.get('server_filename', 'Terabox File'),
+                                        "size": self._format_size(file_info.get('size', 0)),
+                                        "download_url": download_url
+                                    }]
+                                }
+                
+                logger.warning("⚠️ Cookie method: No valid data in response")
+            else:
+                logger.warning("⚠️ TERABOX_COOKIE not configured")
+                
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"❌ Cookie method failed: {e}")
         
         # All methods failed
         error_msg = f"All Terabox methods failed! Last error: {last_error}"
         logger.error(error_msg)
         raise Exception(error_msg)
+    
+    def _format_size(self, size_bytes):
+        """Format bytes to human readable size"""
+        try:
+            size_bytes = int(size_bytes)
+            for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+                if size_bytes < 1024.0:
+                    return f"{size_bytes:.2f} {unit}"
+                size_bytes /= 1024.0
+            return f"{size_bytes:.2f} PB"
+        except:
+            return "Unknown"
     
     def _is_error_response(self, data: Dict) -> bool:
         """Check if response contains error"""
@@ -307,4 +347,4 @@ def format_size(size_input) -> str:
         return f"{size_bytes:.2f} PB"
     except:
         return str(size_input)
-                    
+    
