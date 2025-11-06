@@ -1,6 +1,6 @@
 """
-Terabox API - Updated with Working APIs (November 2025)
-Priority: Udayscript API (terabox.udayscriptsx.workers.dev) → Wdzone API
+Terabox API - Fixed Response Format Parsing (November 2025)
+Handles: Udayscript + Wdzone API response formats
 """
 
 import requests
@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 class TeraboxAPI:
     def __init__(self):
         """Initialize with working API endpoints - Udayscript FIRST"""
-        # Priority order: Udayscript first, Wdzone as backup
         self.api_endpoints = [
             {
                 'name': 'Udayscript',
@@ -35,20 +34,9 @@ class TeraboxAPI:
         self.timeout = 30
 
     def extract_data(self, url: str, video_quality: str = "HD Video") -> Dict:
-        """
-        Extract Terabox file info using external APIs
-        Priority: Udayscript → Wdzone
-        
-        Args:
-            url: Terabox share URL
-            video_quality: Preferred quality
-        
-        Returns:
-            Dict with files list containing name, size, and download_url
-        """
+        """Extract Terabox file info - Priority: Udayscript → Wdzone"""
         logger.info(f"🔍 Extracting from: {url}")
         
-        # Try each API endpoint in priority order
         for api_config in self.api_endpoints:
             try:
                 api_name = api_config['name']
@@ -57,29 +45,27 @@ class TeraboxAPI:
                 
                 logger.info(f"🌐 Trying {api_name} API...")
                 
-                # Build request URL
                 full_url = f"{api_url}?{param_name}={quote(url)}"
-                
-                # Make request
-                response = requests.get(
-                    full_url,
-                    headers=self.headers,
-                    timeout=self.timeout
-                )
+                response = requests.get(full_url, headers=self.headers, timeout=self.timeout)
                 
                 logger.info(f"📡 {api_name} Response Status: {response.status_code}")
                 
                 if response.status_code == 200:
                     data = response.json()
+                    logger.info(f"📊 {api_name} Response Fields: {list(data.keys())}")
                     
-                    # Parse response based on API
-                    files = self._parse_api_response(data, api_name)
+                    # Parse based on API name
+                    files = None
+                    if api_name == 'Udayscript':
+                        files = self._parse_udayscript(data)
+                    elif api_name == 'Wdzone':
+                        files = self._parse_wdzone(data)
                     
                     if files:
                         logger.info(f"✅ {api_name} SUCCESS! Found {len(files)} file(s)")
                         return {"files": files, "api_used": api_name}
                     else:
-                        logger.warning(f"⚠️ {api_name} returned empty files")
+                        logger.warning(f"⚠️ {api_name} returned empty/unparseable data")
                         
             except requests.exceptions.Timeout:
                 logger.warning(f"⏱️ {api_name} timed out")
@@ -91,127 +77,146 @@ class TeraboxAPI:
                 logger.error(f"❌ {api_name} error: {str(e)[:100]}")
                 continue
         
-        # All APIs failed
         raise Exception("❌ All APIs failed. Please check URL or try again later.")
 
-    def _parse_api_response(self, data: Dict, api_name: str) -> List[Dict]:
-        """Parse API response based on source"""
-        files = []
-        
+    def _parse_udayscript(self, data: Dict) -> Optional[List[Dict]]:
+        """Parse Udayscript API response format"""
         try:
-            # Check for error in response
-            if isinstance(data, dict):
-                # Check common error fields
-                if 'error' in data or 'Error' in data:
-                    logger.warning(f"⚠️ {api_name} returned error: {data.get('error') or data.get('Error')}")
-                    return []
-                
-                if 'Status' in data and data['Status'] == 'Error':
-                    logger.warning(f"⚠️ {api_name} returned error: {data.get('Message', 'Unknown error')}")
-                    return []
-                
-                if '❌' in str(data) or '⚠️' in str(data):
-                    logger.warning(f"⚠️ {api_name} returned error response")
-                    return []
-                
-                # Parse based on API response format
-                file_list = self._extract_file_list(data)
-                
-                if not file_list:
-                    logger.warning(f"⚠️ {api_name}: Could not extract file list")
-                    return []
-                
-                # Parse each file
-                if isinstance(file_list, list):
-                    for file_info in file_list:
-                        parsed_file = self._parse_file_info(file_info)
-                        if parsed_file:
-                            files.append(parsed_file)
-                            
-        except Exception as e:
-            logger.error(f"❌ Error parsing {api_name} response: {str(e)[:100]}")
+            # Udayscript returns single file object with: file_name, link/direct_link, size, etc
+            if not isinstance(data, dict):
+                return None
             
-        return files
-
-    def _extract_file_list(self, data: Dict) -> Optional[List]:
-        """Extract file list from various response formats"""
-        # Try multiple field names for file list
-        possible_fields = ['files', 'list', 'data', 'results', 'items']
-        
-        for field in possible_fields:
-            if field in data:
-                value = data[field]
-                if isinstance(value, list):
-                    return value
-                elif isinstance(value, dict) and 'files' in value:
-                    return value['files']
-                elif isinstance(value, dict):
-                    return [value]
-        
-        # If single file object (has download_url or similar)
-        if 'download_url' in data or 'downloadUrl' in data or 'dlink' in data or 'url' in data:
-            return [data]
-        
-        logger.warning(f"⚠️ Available fields: {list(data.keys())}")
-        return None
-
-    def _parse_file_info(self, file_info: Dict) -> Optional[Dict]:
-        """Parse individual file information"""
-        try:
-            # Extract download URL (try multiple field names)
+            # Check for error
+            if 'error' in data or data.get('status') == 'error':
+                logger.warning(f"⚠️ Udayscript error: {data.get('error', data.get('message'))}")
+                return None
+            
+            # Extract file info from Udayscript response
+            filename = data.get('file_name') or data.get('filename') or 'Terabox File'
+            
+            # Try multiple download URL fields
             download_url = (
-                file_info.get('download_url') or 
-                file_info.get('downloadUrl') or 
-                file_info.get('dlink') or
-                file_info.get('url') or
-                file_info.get('link') or
-                file_info.get('direct_link')
+                data.get('direct_link') or 
+                data.get('link') or
+                data.get('download_url') or
+                data.get('url')
             )
             
             if not download_url:
-                logger.warning("⚠️ No download URL found in file info")
+                logger.warning("⚠️ No download URL in Udayscript response")
                 return None
             
-            # Extract filename
-            filename = (
-                file_info.get('name') or
-                file_info.get('filename') or
-                file_info.get('server_filename') or
-                file_info.get('title') or
-                'Terabox File'
-            )
+            # Extract size
+            size_str = data.get('size') or str(data.get('sizebytes', 0))
+            size_formatted = self._format_size(data.get('sizebytes') or size_str)
             
-            # Extract file size
-            size = file_info.get('size') or file_info.get('filesize') or 0
-            if isinstance(size, (int, float)):
-                size_formatted = self._format_size(size)
-            else:
-                size_formatted = str(size)
-            
-            return {
+            parsed_file = {
                 'name': filename,
                 'size': size_formatted,
                 'download_url': download_url
             }
             
+            logger.info(f"✅ Parsed Udayscript file: {filename}")
+            return [parsed_file]
+            
         except Exception as e:
-            logger.error(f"❌ Error parsing file info: {str(e)[:100]}")
+            logger.error(f"❌ Error parsing Udayscript response: {str(e)[:100]}")
             return None
 
-    def _format_size(self, size_bytes) -> str:
+    def _parse_wdzone(self, data: Dict) -> Optional[List[Dict]]:
+        """Parse Wdzone API response format"""
+        try:
+            # Wdzone uses emoji keys: '✅ Status', '📜 Extracted Info', '🔗 ShortLink'
+            
+            # Check status
+            status = data.get('✅ Status') or data.get('Status')
+            if status != 'Success' and status != 'success':
+                logger.warning(f"⚠️ Wdzone status not success: {status}")
+                return None
+            
+            # Extract info object
+            info = data.get('📜 Extracted Info') or data.get('Extracted Info') or data
+            
+            if not info or not isinstance(info, dict):
+                logger.warning("⚠️ No extracted info in Wdzone response")
+                return None
+            
+            files = []
+            
+            # Handle both single file and multiple files
+            if 'files' in info:
+                file_list = info['files']
+                if not isinstance(file_list, list):
+                    file_list = [file_list]
+            elif 'file_name' in info or 'name' in info:
+                file_list = [info]
+            else:
+                # Try to extract from list
+                file_list = []
+                for key, value in info.items():
+                    if isinstance(value, dict) and ('download_url' in value or 'link' in value):
+                        file_list.append(value)
+            
+            # Parse each file
+            for file_info in file_list:
+                if not isinstance(file_info, dict):
+                    continue
+                
+                filename = (
+                    file_info.get('file_name') or 
+                    file_info.get('name') or
+                    file_info.get('filename') or
+                    'Terabox File'
+                )
+                
+                download_url = (
+                    file_info.get('download_url') or
+                    file_info.get('direct_link') or
+                    file_info.get('link') or
+                    file_info.get('url')
+                )
+                
+                if not download_url:
+                    continue
+                
+                size_str = file_info.get('size') or '0'
+                size_formatted = self._format_size(size_str)
+                
+                parsed_file = {
+                    'name': filename,
+                    'size': size_formatted,
+                    'download_url': download_url
+                }
+                
+                files.append(parsed_file)
+                logger.info(f"✅ Parsed Wdzone file: {filename}")
+            
+            return files if files else None
+            
+        except Exception as e:
+            logger.error(f"❌ Error parsing Wdzone response: {str(e)[:100]}")
+            return None
+
+    def _format_size(self, size_input) -> str:
         """Format bytes to human readable size"""
         try:
-            size_bytes = int(size_bytes)
+            if isinstance(size_input, str):
+                if any(unit in size_input.upper() for unit in ['B', 'KB', 'MB', 'GB', 'TB']):
+                    return size_input
+                try:
+                    size_input = int(size_input)
+                except:
+                    return str(size_input)
+            
+            size_bytes = int(size_input)
             for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
                 if size_bytes < 1024.0:
                     return f"{size_bytes:.2f} {unit}"
                 size_bytes /= 1024.0
             return f"{size_bytes:.2f} PB"
         except:
-            return "Unknown"
+            return str(size_input)
 
-
-# ===== BACKWARD COMPATIBILITY FUNCTIONS =====
 
 def extract_terabox_data(url: str) -> Dict:
     """Backward compatibility wrapper"""
@@ -238,4 +243,4 @@ def format_size(size_input) -> str:
         return f"{size_bytes:.2f} PB"
     except:
         return str(size_input)
-                
+                    
