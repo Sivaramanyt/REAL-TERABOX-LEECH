@@ -12,7 +12,8 @@ from config import *
 from handlers import (
     start, help_command, leech_attempt, verify_callback,
     stats, test_forward, test_shortlink, reset_verify,
-    reset_video_verify  # ✅ NEW: Added video reset function
+    reset_video_verify,  # ✅ NEW: Added video reset function
+    dashboard_callback  # ✅ NEW: Import dashboard callback for menu buttons
 )
 from database import db  # ← CHANGED: Import db directly instead of init_db
 from health_server import run_health_server
@@ -72,6 +73,9 @@ def display_startup_info():
 
 🗑️ Channel Monitor:
    {'✅ Auto-cleanup enabled' if CHANNEL_MONITOR_ENABLED else '❌ Manual cleanup only'}
+
+📊 Dashboard Menu:
+   ✅ Interactive dashboard with 6 menu buttons enabled
 
 ===== STARTUP COMPLETE =====
 """
@@ -143,13 +147,23 @@ def main():
         application.add_handler(CommandHandler("resetverify", reset_verify))
         application.add_handler(CommandHandler("resetvideos", reset_video_verify))  # ✅ NEW
         
+        # ===== NEW: Dashboard Menu Handler (ADD THIS LINE) =====
+        # 🎯 IMPORTANT: This MUST be added BEFORE the general CallbackQueryHandler!
+        application.add_handler(CallbackQueryHandler(dashboard_callback))  # ✅ NEW: Dashboard buttons
+        logger.info("✅ Dashboard menu handler registered")
+        
         # Message router for Terabox links
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
         
         # General callback query handler (MUST BE LAST)
         application.add_handler(CallbackQueryHandler(verify_callback))
         
-        logger.info("🚀 Bot started successfully with Terabox Leech, Random Videos (SEPARATE verification), Auto-Cleanup, Universal Shortlinks!")
+        logger.info("🚀 Bot started successfully with:")
+        logger.info("   ✅ Terabox Leech")
+        logger.info("   ✅ Dashboard Menu (6 buttons)")
+        logger.info("   ✅ Random Videos (SEPARATE verification)")
+        logger.info("   ✅ Auto-Cleanup")
+        logger.info("   ✅ Universal Shortlinks")
         
         application.run_polling(allowed_updates=["message", "callback_query", "channel_post"])
         
@@ -159,4 +173,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
+        
