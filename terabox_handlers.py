@@ -174,7 +174,7 @@ async def process_terabox_download(
 
         # Step 2: Download
         logger.info(f"⬇️ [User {user_id}] Starting download")
-        file_path = await download_file(download_url, filename, status_msg)
+        file_path = await download_file(download_url, filename, status_msg, referer=terabox_url)
         logger.info(f"✅ [User {user_id}] Download complete -> {file_path}")
 
         # Step 3: Upload
