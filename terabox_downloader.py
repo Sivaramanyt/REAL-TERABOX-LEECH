@@ -1,6 +1,7 @@
 """
 Terabox Downloader - robust headers + cancel + split-while-downloading + throughput tuning
 """
+
 import os
 import logging
 import time
@@ -17,10 +18,11 @@ from terabox_api import format_size
 logger = logging.getLogger(__name__)
 
 DOWNLOAD_DIR = "downloads"
-CHUNK_SIZE = int(os.getenv("DOWNLOAD_CHUNK_KB", "512")) * 1024  # default 512 KB
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+CHUNK_SIZE = int(os.getenv("DOWNLOAD_CHUNK_KB", "768")) * 1024  # default 768 KB for higher throughput
+PROGRESS_INTERVAL_SEC = int(os.getenv("PROGRESS_INTERVAL_SEC", "8"))  # edit progress every 8s
+MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB hard cap
 VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
-THUMBNAIL_MAX_MB = int(os.getenv("THUMBNAIL_MAX_MB", "300"))
+THUMBNAIL_MAX_MB = int(os.getenv("THUMBNAIL_MAX_MB", "300"))  # skip thumb above this to avoid OOM
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -33,6 +35,9 @@ def create_progress_bar(percentage: float) -> str:
     return '█' * filled + '░' * empty
 
 def generate_thumbnail(video_path):
+    """
+    Generate thumbnail from video using ffmpeg. Returns path or None.
+    """
     try:
         thumb_path = video_path + "_thumb.jpg"
         cmd = [
@@ -50,6 +55,9 @@ def generate_thumbnail(video_path):
         return None
 
 async def update_progress(message, downloaded, total_size, start_time):
+    """
+    Edit a progress message at a controlled interval to reduce backpressure.
+    """
     try:
         if total_size == 0:
             return
@@ -92,21 +100,26 @@ async def download_file(
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     base_path = os.path.join(DOWNLOAD_DIR, filename)
 
+    # Prefer fastest referers first
     referer_chain = [r for r in [referer, "https://teraboxapp.com/", "https://www.terabox.com/", "https://1024tera.com/"] if r]
     part_limit = split_part_mb * 1024 * 1024
     last_err = None
 
     def try_request(headers):
-        return requests.get(url, headers=headers, stream=True, timeout=(30, 300), allow_redirects=True)
+        return requests.get(
+            url, headers=headers, stream=True,
+            timeout=(30, 300), allow_redirects=True
+        )
 
     for r in referer_chain:
         headers = {
             "User-Agent": DEFAULT_UA,
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "identity",   # raw stream, better for large files
             "Connection": "keep-alive",
             "Referer": r,
-            "Range": "bytes=0-",
+            "Range": "bytes=0-",             # probe to satisfy hotlink checks
         }
         try:
             resp = try_request(headers)
@@ -116,7 +129,9 @@ async def download_file(
                 continue
             resp.raise_for_status()
 
-            headers_no_range = dict(headers); headers_no_range.pop("Range", None)
+            # Reopen without Range to improve throughput after validation
+            headers_no_range = dict(headers)
+            headers_no_range.pop("Range", None)
             try:
                 resp2 = try_request(headers_no_range)
                 if resp2.status_code in (200, 206):
@@ -170,7 +185,7 @@ async def download_file(
                         written_in_part += len(chunk)
 
                     current_time = time.time()
-                    if status_message and (current_time - last_update >= 6):
+                    if status_message and (current_time - last_update >= PROGRESS_INTERVAL_SEC):
                         try:
                             await update_progress(status_message, downloaded, total_size, start_time)
                         except:
@@ -192,6 +207,7 @@ async def download_file(
             last_err = str(e)
             logger.warning(f"attempt with Referer={r} failed: {e}")
 
+        # Cleanup partials before next referer attempt
         try:
             if split_enabled:
                 base_dir = os.path.dirname(base_path)
@@ -209,6 +225,9 @@ async def download_file(
     raise Exception(f"Download failed: {last_err or 'unknown error'}")
 
 async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE, file_path, caption):
+    """
+    Upload with safe thumbnail policy and 413 fallback from sendVideo to sendDocument.
+    """
     try:
         if not os.path.exists(file_path):
             raise Exception("File not found after download")
@@ -238,6 +257,7 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
                                 supports_streaming=True, read_timeout=300, write_timeout=300
                             )
                     except Exception as e:
+                        # Fallback for 413 or any sendVideo failure
                         if "413" in str(e) or "Request Entity Too Large" in str(e):
                             logger.warning("413 on sendVideo; falling back to sendDocument")
                         else:
@@ -273,10 +293,10 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
         raise Exception(f"Upload error: {str(e)}")
 
 def cleanup_file(file_path):
+    """Delete downloaded file or part to save disk."""
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
             logger.info(f"🗑️ Cleaned up: {file_path}")
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
-        
