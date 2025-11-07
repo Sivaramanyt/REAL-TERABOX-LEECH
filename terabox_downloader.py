@@ -1,12 +1,12 @@
 """
-Terabox Downloader - FIXED with reliable requests library
+Terabox Downloader - robust headers + cancel + split-while-downloading + throughput tuning
 """
-
 import os
 import logging
 import time
 import subprocess
 import requests
+from typing import Optional
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -17,55 +17,39 @@ from terabox_api import format_size
 logger = logging.getLogger(__name__)
 
 DOWNLOAD_DIR = "downloads"
-CHUNK_SIZE = 8192  # 8KB chunks
+CHUNK_SIZE = int(os.getenv("DOWNLOAD_CHUNK_KB", "512")) * 1024  # default 512 KB
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
+THUMBNAIL_MAX_MB = int(os.getenv("THUMBNAIL_MAX_MB", "300"))
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 )
 
-def create_progress_bar(percentage):
-    """Create visual progress bar"""
+def create_progress_bar(percentage: float) -> str:
     filled = int(percentage / 10)
     empty = 10 - filled
     return '█' * filled + '░' * empty
 
 def generate_thumbnail(video_path):
-    """
-    Generate thumbnail from video using ffmpeg
-    Returns thumbnail path or None
-    """
     try:
         thumb_path = video_path + "_thumb.jpg"
         cmd = [
-            'ffmpeg',
-            '-i', video_path,
-            '-ss', '00:00:01.000',
-            '-vframes', '1',
-            '-vf', 'scale=320:320:force_original_aspect_ratio=decrease',
-            '-y',
-            thumb_path
+            'ffmpeg', '-i', video_path, '-ss', '00:00:01.000', '-vframes', '1',
+            '-vf', 'scale=320:320:force_original_aspect_ratio=decrease', '-y', thumb_path
         ]
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30
-        )
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
         if result.returncode == 0 and os.path.exists(thumb_path):
             logger.info(f"✅ Thumbnail generated: {thumb_path}")
             return thumb_path
-        else:
-            logger.warning(f"⚠️ Thumbnail generation failed")
-            return None
+        logger.warning("⚠️ Thumbnail generation failed")
+        return None
     except Exception as e:
         logger.error(f"❌ Thumbnail error: {e}")
         return None
 
 async def update_progress(message, downloaded, total_size, start_time):
-    """Update download progress message"""
     try:
         if total_size == 0:
             return
@@ -88,103 +72,145 @@ async def update_progress(message, downloaded, total_size, start_time):
     except Exception as e:
         logger.debug(f"Progress update error: {e}")
 
-# ====== EDITED FUNCTION BELOW (essential changes only) ======
-async def download_file(url, filename, status_message=None, referer: str | None = None):
+def _open_part(base_path: str, idx: int):
+    part_path = f"{base_path}.part{idx:02d}"
+    return part_path, open(part_path, "wb")
+
+async def download_file(
+    url: str,
+    filename: str,
+    status_message=None,
+    referer: Optional[str] = None,
+    cancel_event=None,
+    split_enabled: bool = False,
+    split_part_mb: int = 200
+) -> str | list[str]:
     """
-    Download file using requests (with browser-like headers + Referer + Range)
-    referer: pass the user's share URL (e.g., terasharefile/terabox link) to satisfy hotlink checks.
+    Stream download with browser-like headers, Referer, cancel support, and optional on-disk splitting.
+    Returns a single path (no split) or list of part paths (split).
     """
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    file_path = os.path.join(DOWNLOAD_DIR, filename)
+    base_path = os.path.join(DOWNLOAD_DIR, filename)
 
-    # Build a small referer chain to retry on 403
     referer_chain = [r for r in [referer, "https://teraboxapp.com/", "https://www.terabox.com/", "https://1024tera.com/"] if r]
+    part_limit = split_part_mb * 1024 * 1024
+    last_err = None
 
-    try:
-        logger.info(f"⬇️ Starting download: {filename}")
+    def try_request(headers):
+        return requests.get(url, headers=headers, stream=True, timeout=(30, 300), allow_redirects=True)
 
-        # Attempt with each referer until one succeeds
-        last_err = None
-        for r in referer_chain:
-            headers = {
-                'User-Agent': DEFAULT_UA,
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Connection': 'keep-alive',
-                'Referer': r,
-                # Some edges accept a ranged request first
-                'Range': 'bytes=0-'
-            }
+    for r in referer_chain:
+        headers = {
+            "User-Agent": DEFAULT_UA,
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
+            "Referer": r,
+            "Range": "bytes=0-",
+        }
+        try:
+            resp = try_request(headers)
+            if resp.status_code == 403:
+                last_err = f"403 with Referer={r}"
+                logger.warning(last_err)
+                continue
+            resp.raise_for_status()
 
+            # reopen without Range for better throughput
+            headers_no_range = dict(headers); headers_no_range.pop("Range", None)
             try:
-                with requests.get(url, headers=headers, stream=True, timeout=(30, 300), allow_redirects=True) as response:
-                    if response.status_code == 403:
-                        last_err = f"403 with Referer={r}"
-                        logger.warning(last_err)
+                resp2 = try_request(headers_no_range)
+                if resp2.status_code in (200, 206):
+                    resp.close()
+                    resp = resp2
+            except Exception:
+                pass
+
+            total_size = int(resp.headers.get("content-length", "0"))
+            if total_size and total_size > MAX_FILE_SIZE:
+                resp.close()
+                raise Exception(f"File too large: {format_size(total_size)} (Max: 2GB)")
+
+            parts: list[str] = []
+            part_idx = 1
+            written_in_part = 0
+            downloaded = 0
+            start_time = time.time()
+            last_update = 0
+
+            if split_enabled:
+                part_path, f = _open_part(base_path, part_idx)
+                parts.append(part_path)
+            else:
+                f = open(base_path, "wb")
+
+            with f:
+                for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                    if cancel_event and cancel_event.is_set():
+                        resp.close()
+                        raise Exception("Cancelled by user")
+                    if not chunk:
                         continue
 
-                    response.raise_for_status()
+                    if split_enabled and written_in_part + len(chunk) > part_limit:
+                        remain = part_limit - written_in_part
+                        if remain > 0:
+                            f.write(chunk[:remain])
+                            downloaded += remain
+                            written_in_part += remain
+                            chunk = chunk[remain:]
+                        f.close()
+                        part_idx += 1
+                        written_in_part = 0
+                        part_path, f = _open_part(base_path, part_idx)
+                        parts.append(part_path)
 
-                    total_size = int(response.headers.get('content-length', 0))
-                    if total_size > MAX_FILE_SIZE:
-                        raise Exception(f"File too large: {format_size(total_size)} (Max: 2GB)")
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if split_enabled:
+                        written_in_part += len(chunk)
 
-                    downloaded = 0
-                    start_time = time.time()
-                    last_update = 0
+                    current_time = time.time()
+                    if status_message and (current_time - last_update >= 6):
+                        try:
+                            await update_progress(status_message, downloaded, total_size, start_time)
+                        except:
+                            pass
+                        last_update = current_time
 
-                    with open(file_path, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
-                            if not chunk:
-                                continue
-                            f.write(chunk)
-                            downloaded += len(chunk)
+            resp.close()
+            if split_enabled:
+                return parts
+            return base_path
 
-                            # Update progress every 3 seconds
-                            current_time = time.time()
-                            if status_message and (current_time - last_update >= 3):
-                                try:
-                                    await update_progress(status_message, downloaded, total_size, start_time)
-                                except:
-                                    pass
-                                last_update = current_time
+        except requests.Timeout as e:
+            last_err = f"timeout with Referer={r}: {e}"
+            logger.warning(last_err)
+        except requests.ConnectionError as e:
+            last_err = f"connection error with Referer={r}: {e}"
+            logger.warning(last_err)
+        except Exception as e:
+            last_err = str(e)
+            logger.warning(f"attempt with Referer={r} failed: {e}")
 
-                total_time = time.time() - start_time
-                avg_speed = downloaded / total_time if total_time > 0 else 0
-                logger.info(f"✅ Download complete: {format_size(downloaded)} in {int(total_time)}s - {format_size(avg_speed)}/s")
-                return file_path
-
-            except requests.Timeout as e:
-                last_err = f"timeout with Referer={r}: {e}"
-                logger.warning(last_err)
-                if os.path.exists(file_path):
-                    try: os.remove(file_path)
+        # cleanup partials
+        try:
+            if split_enabled:
+                base_dir = os.path.dirname(base_path)
+                for fn in os.listdir(base_dir):
+                    if fn.startswith(os.path.basename(base_path) + ".part"):
+                        try: os.remove(os.path.join(base_dir, fn))
+                        except: pass
+            else:
+                if os.path.exists(base_path):
+                    try: os.remove(base_path)
                     except: pass
+        except:
+            pass
 
-            except requests.ConnectionError as e:
-                last_err = f"connection error with Referer={r}: {e}"
-                logger.warning(last_err)
-                if os.path.exists(file_path):
-                    try: os.remove(file_path)
-                    except: pass
-
-            except Exception as e:
-                last_err = str(e)
-                logger.warning(f"attempt with Referer={r} failed: {e}")
-                if os.path.exists(file_path):
-                    try: os.remove(file_path)
-                    except: pass
-
-        raise Exception(f"Download failed: {last_err or 'unknown error'}")
-
-    except Exception as e:
-        if os.path.exists(file_path):
-            try: os.remove(file_path)
-            except: pass
-        raise Exception(f"Download failed: {str(e)}")
+    raise Exception(f"Download failed: {last_err or 'unknown error'}")
 
 async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE, file_path, caption):
-    """Upload file to Telegram with thumbnail support"""
     try:
         if not os.path.exists(file_path):
             raise Exception("File not found after download")
@@ -198,41 +224,31 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         try:
             with open(file_path, 'rb') as f:
-                if is_video:
-                    # Generate thumbnail for video
+                if is_video and file_size <= THUMBNAIL_MAX_MB * 1024 * 1024:
                     logger.info("📸 Generating thumbnail...")
                     thumb_path = generate_thumbnail(file_path)
-
-                    # Upload video with thumbnail (if available)
                     if thumb_path and os.path.exists(thumb_path):
                         with open(thumb_path, 'rb') as thumb:
                             sent_msg = await update.message.reply_video(
-                                video=f,
-                                caption=caption,
-                                thumbnail=thumb,
-                                supports_streaming=True,
-                                read_timeout=300,
-                                write_timeout=300
+                                video=f, caption=caption, thumbnail=thumb,
+                                supports_streaming=True, read_timeout=300, write_timeout=300
                             )
                     else:
-                        # Upload without thumbnail if generation failed
                         sent_msg = await update.message.reply_video(
-                            video=f,
-                            caption=caption,
-                            supports_streaming=True,
-                            read_timeout=300,
-                            write_timeout=300
+                            video=f, caption=caption, supports_streaming=True,
+                            read_timeout=300, write_timeout=300
                         )
                 else:
-                    # Upload as document
-                    sent_msg = await update.message.reply_document(
-                        document=f,
-                        caption=caption,
-                        read_timeout=300,
-                        write_timeout=300
-                    )
+                    if is_video:
+                        sent_msg = await update.message.reply_video(
+                            video=f, caption=caption, supports_streaming=True,
+                            read_timeout=300, write_timeout=300
+                        )
+                    else:
+                        sent_msg = await update.message.reply_document(
+                            document=f, caption=caption, read_timeout=300, write_timeout=300
+                        )
         finally:
-            # Cleanup thumbnail
             if thumb_path and os.path.exists(thumb_path):
                 try:
                     os.remove(thumb_path)
@@ -249,7 +265,6 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
         raise Exception(f"Upload error: {str(e)}")
 
 def cleanup_file(file_path):
-    """Delete downloaded file"""
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
