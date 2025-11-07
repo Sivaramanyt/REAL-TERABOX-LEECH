@@ -48,7 +48,6 @@ TERABOX_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# Generic URL finder used by resolver
 URL_PATTERN = re.compile(r'https?://[^\s<>"\']+')
 
 # ===== in-memory single-leech + cancel + global cap =====
@@ -58,7 +57,6 @@ CANCEL_FLAGS: Dict[int, asyncio.Event] = {}
 MAX_CONCURRENT_LEECH = int(os.getenv("MAX_CONCURRENT_LEECH", "2"))
 LEECH_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_LEECH)
 
-# ===== resolver fallback =====
 async def resolve_canonical_terabox_url(message_text: str) -> Optional[str]:
     m = TERABOX_PATTERN.search(message_text)
     if m:
@@ -90,7 +88,6 @@ async def resolve_canonical_terabox_url(message_text: str) -> Optional[str]:
         logger.warning(f"resolver fallback failed: {e}")
     return None
 
-# ===== process download/upload (split > 300MB) =====
 async def process_terabox_download(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -220,8 +217,7 @@ async def process_terabox_download(
         elif used_attempts >= FREE_LEECH_LIMIT and not is_verified:
             token = generate_verify_token()
             set_verification_token(user_id, token)
-            bot_username = context.bot.username
-            verify_link = generate_monetized_verification_link(bot_username, token)
+            verify_link = generate_monetized_verification_link(context.bot.username, token)
             keyboard = [
                 [InlineKeyboardButton("✅ VERIFY FOR LEECH", url=verify_link)],
                 [InlineKeyboardButton("📺 HOW TO VERIFY?", url="https://t.me/Sr_Movie_Links/52")],
@@ -254,7 +250,6 @@ async def process_terabox_download(
         except:
             pass
 
-# ===== inline cancel =====
 async def cancel_leech_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -278,7 +273,6 @@ async def cancel_leech_callback(update: Update, context: ContextTypes.DEFAULT_TY
     ev.set()
     await q.edit_message_text("🛑 Leech cancelled. You can start a new leech now.")
 
-# ===== /cancel command =====
 async def cancel_current_leech(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     ev = CANCEL_FLAGS.get(user_id)
@@ -288,7 +282,6 @@ async def cancel_current_leech(update: Update, context: ContextTypes.DEFAULT_TYP
     ev.set()
     await update.message.reply_text("🛑 Leech cancelled. You can start a new leech now.")
 
-# ===== main entry to handle links =====
 async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message_text = update.message.text or ""
@@ -354,3 +347,4 @@ async def handle_terabox_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     ACTIVE_TASKS[user_id] = task
     return True
+    
