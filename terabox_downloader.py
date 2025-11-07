@@ -1,13 +1,15 @@
 """
-Terabox Downloader - robust headers + cancel + split-while-downloading + throughput tuning
+Terabox Downloader - video-first uploads with safe segmentation, robust headers,
+cancel support, and throughput tuning.
 """
 
 import os
+import glob
 import logging
 import time
 import subprocess
 import requests
-from typing import Optional
+from typing import Optional, List
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -17,12 +19,18 @@ from terabox_api import format_size
 
 logger = logging.getLogger(__name__)
 
+# ===== Tunables (use env to tweak without code edits) =====
 DOWNLOAD_DIR = "downloads"
-CHUNK_SIZE = int(os.getenv("DOWNLOAD_CHUNK_KB", "768")) * 1024  # default 768 KB for higher throughput
-PROGRESS_INTERVAL_SEC = int(os.getenv("PROGRESS_INTERVAL_SEC", "8"))  # edit progress every 8s
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB hard cap
+CHUNK_SIZE = int(os.getenv("DOWNLOAD_CHUNK_KB", "768")) * 1024      # 768 KB default (good throughput) [env]
+PROGRESS_INTERVAL_SEC = int(os.getenv("PROGRESS_INTERVAL_SEC", "8")) # edit progress every 8s [env]
+MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024                               # 2GB cap
 VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
-THUMBNAIL_MAX_MB = int(os.getenv("THUMBNAIL_MAX_MB", "300"))  # skip thumb above this to avoid OOM
+
+# Video-first policy (no document fallback)
+FORCE_VIDEO_UPLOAD = os.getenv("FORCE_VIDEO_UPLOAD", "true").lower() == "true"       # keep video always [env]
+DISABLE_THUMBNAIL = os.getenv("DISABLE_THUMBNAIL", "true").lower() == "true"         # avoid ffmpeg spikes [env]
+VIDEO_SEGMENT_THRESHOLD_MB = int(os.getenv("VIDEO_SEGMENT_THRESHOLD_MB", "300"))     # segment when >= 300MB [env]
+VIDEO_SEGMENT_TIME_SEC = int(os.getenv("VIDEO_SEGMENT_TIME_SEC", "360"))             # ~6 min per segment [env]
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -34,30 +42,8 @@ def create_progress_bar(percentage: float) -> str:
     empty = 10 - filled
     return '█' * filled + '░' * empty
 
-def generate_thumbnail(video_path):
-    """
-    Generate thumbnail from video using ffmpeg. Returns path or None.
-    """
-    try:
-        thumb_path = video_path + "_thumb.jpg"
-        cmd = [
-            'ffmpeg', '-i', video_path, '-ss', '00:00:01.000', '-vframes', '1',
-            '-vf', 'scale=320:320:force_original_aspect_ratio=decrease', '-y', thumb_path
-        ]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-        if result.returncode == 0 and os.path.exists(thumb_path):
-            logger.info(f"✅ Thumbnail generated: {thumb_path}")
-            return thumb_path
-        logger.warning("⚠️ Thumbnail generation failed")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Thumbnail error: {e}")
-        return None
-
 async def update_progress(message, downloaded, total_size, start_time):
-    """
-    Edit a progress message at a controlled interval to reduce backpressure.
-    """
+    """Edit a progress message at a controlled interval to reduce backpressure."""
     try:
         if total_size == 0:
             return
@@ -84,23 +70,66 @@ def _open_part(base_path: str, idx: int):
     part_path = f"{base_path}.part{idx:02d}"
     return part_path, open(part_path, "wb")
 
+def _segment_output_paths(base_name: str) -> List[str]:
+    # e.g., movie.mp4 -> movie_seg000.mp4, movie_seg001.mp4, ...
+    root, ext = os.path.splitext(base_name)
+    pattern = os.path.join(DOWNLOAD_DIR, f"{root}_seg%03d.mp4")
+    glob_pattern = os.path.join(DOWNLOAD_DIR, f"{root}_seg*.mp4")
+    return pattern, glob_pattern
+
+def segment_video(input_path: str, segment_time_sec: int) -> List[str]:
+    """
+    Split video into valid MP4 chunks without re-encoding using ffmpeg segmenter.
+    Returns list of segment file paths.
+    """
+    try:
+        base_name = os.path.basename(input_path)
+        out_pattern, glob_pattern = _segment_output_paths(base_name)
+
+        # Cleanup any old segments
+        for old in glob.glob(glob_pattern):
+            try: os.remove(old)
+            except: pass
+
+        cmd = [
+            'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+            '-i', input_path,
+            '-c', 'copy',              # no re-encode = low CPU/RAM
+            '-map', '0',
+            '-f', 'segment',
+            '-segment_time', str(segment_time_sec),
+            '-reset_timestamps', '1',
+            out_pattern
+        ]
+        logger.info(f"🎬 Segmenting video: {' '.join(cmd)}")
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
+        if res.returncode != 0:
+            raise Exception(f"ffmpeg segment failed: {res.stderr.decode(errors='ignore')[:400]}")
+
+        paths = sorted(glob.glob(glob_pattern))
+        if not paths:
+            raise Exception("ffmpeg produced no segments")
+        logger.info(f"✅ Segments ready: {len(paths)} parts")
+        return paths
+    except Exception as e:
+        raise Exception(f"Segment error: {str(e)}")
+
 async def download_file(
     url: str,
     filename: str,
     status_message=None,
     referer: Optional[str] = None,
     cancel_event=None,
-    split_enabled: bool = False,
+    split_enabled: bool = False,   # byte-split kept for non-video paths; video uses segmentation after download
     split_part_mb: int = 200
 ) -> str | list[str]:
     """
-    Stream download with browser-like headers, Referer, cancel support, and optional on-disk splitting.
-    Returns a single path (no split) or list of part paths (split).
+    Stream download with browser-like headers, Referer, cancel support, optional on-disk byte splitting.
+    For video-first uploads, keep split_enabled=False so the full file exists for ffmpeg segmentation.
     """
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     base_path = os.path.join(DOWNLOAD_DIR, filename)
 
-    # Prefer fastest referers first
     referer_chain = [r for r in [referer, "https://teraboxapp.com/", "https://www.terabox.com/", "https://1024tera.com/"] if r]
     part_limit = split_part_mb * 1024 * 1024
     last_err = None
@@ -116,7 +145,7 @@ async def download_file(
             "User-Agent": DEFAULT_UA,
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "identity",   # raw stream, better for large files
+            "Accept-Encoding": "identity",   # prefer raw stream for big files
             "Connection": "keep-alive",
             "Referer": r,
             "Range": "bytes=0-",             # probe to satisfy hotlink checks
@@ -130,8 +159,7 @@ async def download_file(
             resp.raise_for_status()
 
             # Reopen without Range to improve throughput after validation
-            headers_no_range = dict(headers)
-            headers_no_range.pop("Range", None)
+            headers_no_range = dict(headers); headers_no_range.pop("Range", None)
             try:
                 resp2 = try_request(headers_no_range)
                 if resp2.status_code in (200, 206):
@@ -145,7 +173,7 @@ async def download_file(
                 resp.close()
                 raise Exception(f"File too large: {format_size(total_size)} (Max: 2GB)")
 
-            parts: list[str] = []
+            parts: List[str] = []
             part_idx = 1
             written_in_part = 0
             downloaded = 0
@@ -226,7 +254,8 @@ async def download_file(
 
 async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE, file_path, caption):
     """
-    Upload with safe thumbnail policy and 413 fallback from sendVideo to sendDocument.
+    Pure video path: sendVideo for small/medium files; for large files, first segment into valid MP4s
+    and send each segment via sendVideo. No document fallback to honor video-only requirement.
     """
     try:
         if not os.path.exists(file_path):
@@ -236,56 +265,46 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
         logger.info(f"⬆️ Uploading to Telegram: {format_size(file_size)}")
 
         is_video = any(file_path.lower().endswith(ext) for ext in VIDEO_EXTENSIONS)
-        thumb_path = None
-        sent_msg = None
+        if not is_video:
+            # If non-video, still send as document (can’t be video)
+            with open(file_path, 'rb') as f:
+                sent = await update.message.reply_document(
+                    document=f, caption=caption, read_timeout=300, write_timeout=300
+                )
+            return sent
 
+        # 1) Large video -> segment to valid MP4 chunks, then sendVideo for each
+        if file_size >= VIDEO_SEGMENT_THRESHOLD_MB * 1024 * 1024:
+            seg_paths = segment_video(file_path, VIDEO_SEGMENT_TIME_SEC)
+            last_sent = None
+            total_parts = len(seg_paths)
+            idx = 1
+            for p in seg_paths:
+                with open(p, 'rb') as f:
+                    part_caption = f"{caption}\n🧩 Part {idx}/{total_parts}"
+                    last_sent = await update.message.reply_video(
+                        video=f, caption=part_caption, supports_streaming=True,
+                        read_timeout=300, write_timeout=300
+                    )
+                # cleanup segment immediately
+                try: os.remove(p)
+                except: pass
+                idx += 1
+            return last_sent
+
+        # 2) Small/medium video -> sendVideo directly (no thumbnail to avoid OOM)
+        thumb_path = None
         try:
             with open(file_path, 'rb') as f:
-                if is_video and file_size <= THUMBNAIL_MAX_MB * 1024 * 1024:
-                    logger.info("📸 Generating thumbnail...")
-                    thumb_path = generate_thumbnail(file_path)
-                    try:
-                        if thumb_path and os.path.exists(thumb_path):
-                            with open(thumb_path, 'rb') as thumb:
-                                sent_msg = await update.message.reply_video(
-                                    video=f, caption=caption, thumbnail=thumb,
-                                    supports_streaming=True, read_timeout=300, write_timeout=300
-                                )
-                        else:
-                            sent_msg = await update.message.reply_video(
-                                video=f, caption=caption,
-                                supports_streaming=True, read_timeout=300, write_timeout=300
-                            )
-                    except Exception as e:
-                        # Fallback for 413 or any sendVideo failure
-                        if "413" in str(e) or "Request Entity Too Large" in str(e):
-                            logger.warning("413 on sendVideo; falling back to sendDocument")
-                        else:
-                            logger.warning(f"sendVideo failed; falling back: {e}")
-                        f.seek(0)
-                        sent_msg = await update.message.reply_document(
-                            document=f, caption=caption, read_timeout=300, write_timeout=300
-                        )
-                else:
-                    if is_video:
-                        sent_msg = await update.message.reply_video(
-                            video=f, caption=caption, supports_streaming=True,
-                            read_timeout=300, write_timeout=300
-                        )
-                    else:
-                        sent_msg = await update.message.reply_document(
-                            document=f, caption=caption, read_timeout=300, write_timeout=300
-                        )
+                sent = await update.message.reply_video(
+                    video=f, caption=caption, supports_streaming=True,
+                    read_timeout=300, write_timeout=300
+                )
+            return sent
         finally:
             if thumb_path and os.path.exists(thumb_path):
-                try:
-                    os.remove(thumb_path)
-                    logger.info("🗑️ Thumbnail cleaned up")
-                except:
-                    pass
-
-        logger.info("✅ Upload complete")
-        return sent_msg
+                try: os.remove(thumb_path)
+                except: pass
 
     except (TimedOut, NetworkError) as e:
         raise Exception(f"Upload failed: Network issue - {str(e)}")
@@ -300,3 +319,4 @@ def cleanup_file(file_path):
             logger.info(f"🗑️ Cleaned up: {file_path}")
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
+        
