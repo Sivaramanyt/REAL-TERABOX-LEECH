@@ -116,7 +116,6 @@ async def download_file(
                 continue
             resp.raise_for_status()
 
-            # reopen without Range for better throughput
             headers_no_range = dict(headers); headers_no_range.pop("Range", None)
             try:
                 resp2 = try_request(headers_no_range)
@@ -193,7 +192,6 @@ async def download_file(
             last_err = str(e)
             logger.warning(f"attempt with Referer={r} failed: {e}")
 
-        # cleanup partials
         try:
             if split_enabled:
                 base_dir = os.path.dirname(base_path)
@@ -227,16 +225,26 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 if is_video and file_size <= THUMBNAIL_MAX_MB * 1024 * 1024:
                     logger.info("📸 Generating thumbnail...")
                     thumb_path = generate_thumbnail(file_path)
-                    if thumb_path and os.path.exists(thumb_path):
-                        with open(thumb_path, 'rb') as thumb:
+                    try:
+                        if thumb_path and os.path.exists(thumb_path):
+                            with open(thumb_path, 'rb') as thumb:
+                                sent_msg = await update.message.reply_video(
+                                    video=f, caption=caption, thumbnail=thumb,
+                                    supports_streaming=True, read_timeout=300, write_timeout=300
+                                )
+                        else:
                             sent_msg = await update.message.reply_video(
-                                video=f, caption=caption, thumbnail=thumb,
+                                video=f, caption=caption,
                                 supports_streaming=True, read_timeout=300, write_timeout=300
                             )
-                    else:
-                        sent_msg = await update.message.reply_video(
-                            video=f, caption=caption, supports_streaming=True,
-                            read_timeout=300, write_timeout=300
+                    except Exception as e:
+                        if "413" in str(e) or "Request Entity Too Large" in str(e):
+                            logger.warning("413 on sendVideo; falling back to sendDocument")
+                        else:
+                            logger.warning(f"sendVideo failed; falling back: {e}")
+                        f.seek(0)
+                        sent_msg = await update.message.reply_document(
+                            document=f, caption=caption, read_timeout=300, write_timeout=300
                         )
                 else:
                     if is_video:
@@ -271,4 +279,4 @@ def cleanup_file(file_path):
             logger.info(f"🗑️ Cleaned up: {file_path}")
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
-    
+        
