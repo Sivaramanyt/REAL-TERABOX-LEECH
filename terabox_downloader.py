@@ -1,6 +1,6 @@
 """
-Terabox Downloader - video-first uploads with size-aware segmentation, robust headers,
-cancel support, and throughput tuning.
+Terabox Downloader - video-first uploads + size-aware segmentation + turbo 2-lane downloader,
+robust headers, cancel support, and throughput tuning.
 """
 
 import os
@@ -10,6 +10,7 @@ import logging
 import time
 import subprocess
 import requests
+import threading
 from typing import Optional, List
 
 from telegram import Update
@@ -28,17 +29,19 @@ MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024                                  # 2GB
 VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
 
 # Video-only policy
-FORCE_VIDEO_UPLOAD = True  # keep video path strictly [no document fallback]
-DISABLE_THUMBNAIL = True   # avoid ffmpeg spikes
+FORCE_VIDEO_UPLOAD = True
+DISABLE_THUMBNAIL = True
 
-# Size-aware segmentation targets
-BOT_API_MAX_MB = int(os.getenv("BOT_API_MAX_MB", "49"))                  # safe cap below 50 MB
-SEGMENT_SAFETY_MB = int(os.getenv("SEGMENT_SAFETY_MB", "2"))            # margin under cap
-MIN_SEG_TIME_SEC = int(os.getenv("MIN_SEG_TIME_SEC", "60"))             # not too tiny
-MAX_SEG_TIME_SEC = int(os.getenv("MAX_SEG_TIME_SEC", "900"))            # not too long
+# Size-aware segmentation targets for Bot API
+BOT_API_MAX_MB = int(os.getenv("BOT_API_MAX_MB", "49"))
+SEGMENT_SAFETY_MB = int(os.getenv("SEGMENT_SAFETY_MB", "2"))
+MIN_SEG_TIME_SEC = int(os.getenv("MIN_SEG_TIME_SEC", "60"))
+MAX_SEG_TIME_SEC = int(os.getenv("MAX_SEG_TIME_SEC", "900"))
+VIDEO_SEGMENT_THRESHOLD_MB = int(os.getenv("VIDEO_SEGMENT_THRESHOLD_MB", "50"))
 
-# If the whole file >= threshold, segment; else upload in one piece
-VIDEO_SEGMENT_THRESHOLD_MB = int(os.getenv("VIDEO_SEGMENT_THRESHOLD_MB", "50"))  # trigger near cap
+# Turbo parallel ranges
+TURBO_SEGMENTS = int(os.getenv("TURBO_SEGMENTS", "2"))           # 1=off, 2=two lanes
+TURBO_MIN_SIZE_MB = int(os.getenv("TURBO_MIN_SIZE_MB", "60"))    # enable turbo on ≥60 MB
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -91,54 +94,67 @@ def ffprobe_duration_seconds(path: str) -> Optional[float]:
         return None
 
 def calc_segment_time_for_size(file_path: str, target_mb: int, safety_mb: int) -> int:
-    """
-    Compute segment_time (seconds) so each MP4 part ≲ (target_mb - safety_mb).
-    Uses bitrate estimate = size/duration; clamps between MIN_SEG_TIME_SEC..MAX_SEG_TIME_SEC.
-    """
-    file_size = os.path.getsize(file_path)  # bytes
+    file_size = os.path.getsize(file_path)
     duration = ffprobe_duration_seconds(file_path) or 0
     if duration <= 0:
-        # Fallback to a conservative default (≈4 min)
         return max(MIN_SEG_TIME_SEC, min(MAX_SEG_TIME_SEC, 240))
-
     bytes_per_sec = file_size / duration
     target_bytes = (target_mb - safety_mb) * 1024 * 1024
     seg_time = int(max(1, target_bytes / max(1, bytes_per_sec)))
-    seg_time = max(MIN_SEG_TIME_SEC, min(MAX_SEG_TIME_SEC, seg_time))
-    return seg_time
+    return max(MIN_SEG_TIME_SEC, min(MAX_SEG_TIME_SEC, seg_time))
 
 def segment_video_by_time(input_path: str, segment_time_sec: int) -> List[str]:
-    """
-    Split video into valid MP4 chunks without re-encoding (copy), based on time.
-    """
     root = os.path.splitext(os.path.basename(input_path))[0]
     out_pattern = os.path.join(DOWNLOAD_DIR, f"{root}_seg%03d.mp4")
     glob_pattern = os.path.join(DOWNLOAD_DIR, f"{root}_seg*.mp4")
-
-    # Cleanup any old segments
     for old in glob.glob(glob_pattern):
         try: os.remove(old)
         except: pass
-
     cmd = [
         'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
-        '-i', input_path,
-        '-c', 'copy', '-map', '0',
-        '-f', 'segment',
-        '-segment_time', str(segment_time_sec),
-        '-reset_timestamps', '1',
-        out_pattern
+        '-i', input_path, '-c', 'copy', '-map', '0',
+        '-f', 'segment', '-segment_time', str(segment_time_sec),
+        '-reset_timestamps', '1', out_pattern
     ]
     logger.info(f"🎬 Segmenting video: {' '.join(cmd)}")
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
     if res.returncode != 0:
         raise Exception(f"ffmpeg segment failed: {res.stderr.decode(errors='ignore')[:400]}")
-
     paths = sorted(glob.glob(glob_pattern))
     if not paths:
         raise Exception("ffmpeg produced no segments")
     logger.info(f"✅ Segments ready: {len(paths)} parts")
     return paths
+
+def _range_fetch(url, headers, start, end, out_path, cancel_event):
+    rng = f"bytes={start}-{end}" if end is not None else f"bytes={start}-"
+    h = dict(headers); h["Range"] = rng
+    with requests.get(url, headers=h, stream=True, timeout=(30, 300), allow_redirects=True) as r:
+        r.raise_for_status()
+        with open(out_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
+                if cancel_event and cancel_event.is_set():
+                    raise Exception("Cancelled by user")
+                if chunk:
+                    f.write(chunk)
+
+async def _download_turbo(url, headers, total_size, base_path, cancel_event):
+    # Two halves
+    mid = (total_size - 1) // 2
+    p1 = base_path + ".seg0"
+    p2 = base_path + ".seg1"
+    t1 = threading.Thread(target=_range_fetch, args=(url, headers, 0, mid, p1, cancel_event), daemon=True)
+    t2 = threading.Thread(target=_range_fetch, args=(url, headers, mid+1, total_size-1, p2, cancel_event), daemon=True)
+    t1.start(); t2.start(); t1.join(); t2.join()
+    # Concatenate
+    with open(base_path, "wb") as out:
+        for p in (p1, p2):
+            with open(p, "rb") as src:
+                for chunk in iter(lambda: src.read(1024 * 1024), b""):
+                    out.write(chunk)
+    try: os.remove(p1); os.remove(p2)
+    except: pass
+    return base_path
 
 async def download_file(
     url: str,
@@ -146,7 +162,7 @@ async def download_file(
     status_message=None,
     referer: Optional[str] = None,
     cancel_event=None,
-    split_enabled: bool = False,   # keep False for videos so we can segment by time after full download
+    split_enabled: bool = False,  # keep off for video so we can segment by time after full download
     split_part_mb: int = 200
 ) -> str | list[str]:
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -172,26 +188,27 @@ async def download_file(
         try:
             resp = try_request(headers)
             if resp.status_code == 403:
-                last_err = f"403 with Referer={r}"
-                logger.warning(last_err)
-                continue
+                last_err = f"403 with Referer={r}"; logger.warning(last_err); continue
             resp.raise_for_status()
 
-            # Reopen without Range for better throughput
             headers_no_range = dict(headers); headers_no_range.pop("Range", None)
             try:
                 resp2 = try_request(headers_no_range)
                 if resp2.status_code in (200, 206):
-                    resp.close()
-                    resp = resp2
+                    resp.close(); resp = resp2
             except Exception:
                 pass
 
             total_size = int(resp.headers.get("content-length", "0"))
             if total_size and total_size > MAX_FILE_SIZE:
-                resp.close()
-                raise Exception(f"File too large: {format_size(total_size)} (Max: 2GB)")
+                resp.close(); raise Exception(f"File too large: {format_size(total_size)} (Max: 2GB)")
 
+            # Turbo path for large files
+            if total_size and total_size >= TURBO_MIN_SIZE_MB * 1024 * 1024 and TURBO_SEGMENTS >= 2:
+                resp.close()
+                return await _download_turbo(url, headers_no_range, total_size, base_path, cancel_event)
+
+            # Single-lane streaming path
             parts: List[str] = []
             part_idx = 1
             written_in_part = 0
@@ -200,61 +217,47 @@ async def download_file(
             last_update = 0
 
             if split_enabled:
-                part_path, f = _open_part(base_path, part_idx)
-                parts.append(part_path)
+                part_path, f = _open_part(base_path, part_idx); parts.append(part_path)
             else:
                 f = open(base_path, "wb")
 
             with f:
                 for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
                     if cancel_event and cancel_event.is_set():
-                        resp.close()
-                        raise Exception("Cancelled by user")
+                        resp.close(); raise Exception("Cancelled by user")
                     if not chunk:
                         continue
 
                     if split_enabled and written_in_part + len(chunk) > part_limit:
                         remain = part_limit - written_in_part
                         if remain > 0:
-                            f.write(chunk[:remain])
-                            downloaded += remain
-                            written_in_part += remain
+                            f.write(chunk[:remain]); downloaded += remain; written_in_part += remain
                             chunk = chunk[remain:]
                         f.close()
-                        part_idx += 1
-                        written_in_part = 0
-                        part_path, f = _open_part(base_path, part_idx)
-                        parts.append(part_path)
+                        part_idx += 1; written_in_part = 0
+                        part_path, f = _open_part(base_path, part_idx); parts.append(part_path)
 
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if split_enabled:
-                        written_in_part += len(chunk)
+                    f.write(chunk); downloaded += len(chunk)
+                    if split_enabled: written_in_part += len(chunk)
 
                     current_time = time.time()
                     if status_message and (current_time - last_update >= PROGRESS_INTERVAL_SEC):
-                        try:
-                            await update_progress(status_message, downloaded, total_size, start_time)
-                        except:
-                            pass
+                        try: await update_progress(status_message, downloaded, total_size, start_time)
+                        except: pass
                         last_update = current_time
 
             resp.close()
-            if split_enabled:
-                return parts
+            if split_enabled: return parts
             return base_path
 
         except requests.Timeout as e:
-            last_err = f"timeout with Referer={r}: {e}"
-            logger.warning(last_err)
+            last_err = f"timeout with Referer={r}: {e}"; logger.warning(last_err)
         except requests.ConnectionError as e:
-            last_err = f"connection error with Referer={r}: {e}"
-            logger.warning(last_err)
+            last_err = f"connection error with Referer={r}: {e}"; logger.warning(last_err)
         except Exception as e:
-            last_err = str(e)
-            logger.warning(f"attempt with Referer={r} failed: {e}")
+            last_err = str(e); logger.warning(f"attempt with Referer={r} failed: {e}")
 
-        # Cleanup partials before retry
+        # Cleanup partials
         try:
             if split_enabled:
                 base_dir = os.path.dirname(base_path)
@@ -273,9 +276,9 @@ async def download_file(
 
 async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE, file_path, caption):
     """
-    Video-only path:
-    - If file >= ~50 MB, compute a segment_time that yields ≤ ~49 MB parts and send each via sendVideo.
-    - If file < ~50 MB, sendVideo directly (no thumbnail) to avoid 413 and memory spikes.
+    Video-only:
+    - If file ≥ ~50 MB, segment by time to keep each part ≤ ~49 MB and send each via sendVideo.
+    - Else sendVideo directly (no thumbnail).
     """
     try:
         if not os.path.exists(file_path):
@@ -293,21 +296,16 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         threshold_bytes = VIDEO_SEGMENT_THRESHOLD_MB * 1024 * 1024
         if file_size >= threshold_bytes:
-            # Size-aware segmentation to keep parts <= BOT_API_MAX_MB
             seg_time = calc_segment_time_for_size(file_path, BOT_API_MAX_MB, SEGMENT_SAFETY_MB)
             seg_paths = segment_video_by_time(file_path, seg_time)
             last_sent = None
-            total = len(seg_paths)
-            idx = 1
+            total = len(seg_paths); idx = 1
             for p in seg_paths:
-                # sanity check size
+                # guard: if any part too big, resegment finer
                 if os.path.getsize(p) >= (BOT_API_MAX_MB * 1024 * 1024):
-                    # if any part still exceeds target, resegment with smaller time
-                    smaller = max(MIN_SEG_TIME_SEC, seg_time // 2)
-                    seg_paths = segment_video_by_time(file_path, smaller)
-                    total = len(seg_paths)
-                    idx = 1
-
+                    finer = max(MIN_SEG_TIME_SEC, seg_time // 2)
+                    seg_paths = segment_video_by_time(file_path, finer)
+                    total = len(seg_paths); idx = 1
                 with open(p, 'rb') as f:
                     part_caption = f"{caption}\n🧩 Part {idx}/{total}"
                     last_sent = await update.message.reply_video(
@@ -319,7 +317,6 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 idx += 1
             return last_sent
 
-        # Small/medium: send as video (no thumbnail to avoid OOM/413 inflation)
         with open(file_path, 'rb') as f:
             return await update.message.reply_video(
                 video=f, caption=caption, supports_streaming=True,
@@ -338,3 +335,4 @@ def cleanup_file(file_path):
             logger.info(f"🗑️ Cleaned up: {file_path}")
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
+        
