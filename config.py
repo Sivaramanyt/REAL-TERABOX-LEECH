@@ -38,6 +38,11 @@ VIDEO_STORAGE_CHANNEL = int(os.getenv("VIDEO_STORAGE_CHANNEL", "0"))  # Your pri
 FREE_VIDEO_LIMIT = int(os.getenv("FREE_VIDEO_LIMIT", "3"))  # Same as leech limit
 VIDEO_VERIFY_TOKEN_TIMEOUT = int(os.getenv("VIDEO_VERIFY_TOKEN_TIMEOUT", "43200"))  # ✅ NEW: 6 hours (21600 seconds)
 
+# Deep-link (channel poster click) gating
+FREE_DEEPLINK_LIMIT = int(os.getenv("FREE_DEEPLINK_LIMIT", "3"))
+DEEP_LINK_VERIFY_TOKEN_TIMEOUT = int(os.getenv("DEEP_LINK_VERIFY_TOKEN_TIMEOUT", "43200"))
+
+
 # Messages
 START_MESSAGE = """
 🤖 **Welcome {mention}!**
@@ -138,3 +143,4 @@ print(f"📢 Auto-Forward: {'Enabled' if AUTO_FORWARD_ENABLED else 'Disabled'}")
 print(f"💰 Monetization: {'Active' if SHORTLINK_API and SHORTLINK_URL else 'Inactive'}")
 print(f"🎬 Random Videos: {'Configured' if VIDEO_STORAGE_CHANNEL else 'Not configured'}")
 print(f"🍪 Cookie Method: {'Enabled' if TERABOX_COOKIE else 'Disabled (API-only)'}")
+print(f"🔗 Deep-link gate: {FREE_DEEPLINK_LIMIT} free, timeout {DEEP_LINK_VERIFY_TOKEN_TIMEOUT}s")
