@@ -1,4 +1,3 @@
-# auto_post.py
 import logging
 import asyncio
 import os
@@ -23,6 +22,15 @@ def _mk_caption(meta: dict, deep_link: str) -> str:
         f"👉 Get it on bot: {deep_link}",
     ])
 
+def _pick_inline_thumb(forwarded_msg) -> str | None:
+    if getattr(forwarded_msg, "video", None) and getattr(forwarded_msg.video, "thumbnail", None):
+        return forwarded_msg.video.thumbnail.file_id
+    if getattr(forwarded_msg, "document", None) and getattr(forwarded_msg.document, "thumbnail", None):
+        return forwarded_msg.document.thumbnail.file_id
+    if getattr(forwarded_msg, "photo", None) and len(forwarded_msg.photo) > 0:
+        return forwarded_msg.photo[-1].file_id
+    return None
+
 async def _run_ffmpeg_frame(input_path: str) -> str | None:
     out = os.path.join(tempfile.gettempdir(), f"thumb_{os.getpid()}.jpg")
     try:
@@ -34,25 +42,18 @@ async def _run_ffmpeg_frame(input_path: str) -> str | None:
     except Exception:
         return None
 
-async def _download_small(context, file_id: str, max_bytes: int = 3_000_000) -> str | None:
-    """
-    Download a small portion of the media to produce a thumbnail.
-    If the file is larger than max_bytes, this will still download the full file
-    because Telegram get_file returns a direct URL without ranged headers in PTB 20.x,
-    so keep limit small to avoid heavy usage on free tier.
-    """
+async def _download_small(context, file_id: str, max_bytes: int = 12_000_000) -> str | None:
     try:
         tg_file = await context.bot.get_file(file_id)
-        # PTB returns a URL; simple streaming download
         import aiohttp, aiofiles
         tmp_path = os.path.join(tempfile.gettempdir(), f"dl_{os.getpid()}.mp4")
         async with aiohttp.ClientSession() as session:
-            async with session.get(tg_file.file_path, timeout=30) as resp:
+            async with session.get(tg_file.file_path, timeout=45) as resp:
                 if resp.status != 200:
                     return None
                 read = 0
                 async with aiofiles.open(tmp_path, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(128*1024):
+                    async for chunk in resp.content.iter_chunked(256*1024):
                         if not chunk:
                             break
                         await f.write(chunk)
@@ -64,18 +65,6 @@ async def _download_small(context, file_id: str, max_bytes: int = 3_000_000) -> 
         logger.warning(f"Download small error: {e}")
         return None
 
-def _pick_inline_thumb(forwarded_msg) -> str | None:
-    # 1) Video thumb
-    if getattr(forwarded_msg, "video", None) and getattr(forwarded_msg.video, "thumbnail", None):
-        return forwarded_msg.video.thumbnail.file_id
-    # 2) Document thumb
-    if getattr(forwarded_msg, "document", None) and getattr(forwarded_msg.document, "thumbnail", None):
-        return forwarded_msg.document.thumbnail.file_id
-    # 3) Photo message
-    if getattr(forwarded_msg, "photo", None) and len(forwarded_msg.photo) > 0:
-        return forwarded_msg.photo[-1].file_id
-    return None
-
 async def post_preview_to_channel(context, forwarded_msg, meta: dict):
     if not AUTO_POST_ENABLED or not POST_CHANNEL_ID:
         logger.info("Auto-post disabled or POST_CHANNEL_ID missing")
@@ -86,7 +75,7 @@ async def post_preview_to_channel(context, forwarded_msg, meta: dict):
         caption = _mk_caption(meta, deep)
         rm = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Get on bot", url=deep)]])
 
-        # Step 1: Try Telegram inline thumbnail
+        # Step 1: Inline thumbnail from Telegram
         thumb_file_id = _pick_inline_thumb(forwarded_msg)
         logger.info(
             f"Poster inline thumb: {bool(thumb_file_id)} | "
@@ -100,21 +89,26 @@ async def post_preview_to_channel(context, forwarded_msg, meta: dict):
             logger.info("✅ Auto-post with inline thumbnail")
             return True
 
-        # Step 2: Lightweight ffmpeg fallback for videos/documents with no thumb
+        # Step 2: ffmpeg fallback on small chunk
         file_id = None
         if getattr(forwarded_msg, "video", None):
             file_id = forwarded_msg.video.file_id
         elif getattr(forwarded_msg, "document", None):
-            # Only attempt if size is small to avoid heavy downloads
             try:
-                size_ok = (getattr(forwarded_msg.document, "file_size", 0) or 0) <= 20_000_000
+                size_ok = (getattr(forwarded_msg.document, "file_size", 0) or 0) <= 15_000_000
             except Exception:
                 size_ok = False
             if size_ok:
                 file_id = forwarded_msg.document.file_id
 
+        # Use original upload's id if provided in meta
+        if not file_id:
+            file_id = meta.get("fallback_file_id")
+
+        logger.info(f"FFMPEG path -> file_id present: {bool(file_id)}")
+
         if file_id:
-            tmp_path = await _download_small(context, file_id, max_bytes=3_000_000)  # ~3MB cap
+            tmp_path = await _download_small(context, file_id, max_bytes=12_000_000)
             if tmp_path:
                 jpg = await _run_ffmpeg_frame(tmp_path)
                 try:
