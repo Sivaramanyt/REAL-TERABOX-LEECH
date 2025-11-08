@@ -68,7 +68,8 @@ async def update_progress(message, downloaded, total_size, start_time):
             f"`{progress_bar}` {percentage:.1f}%\n\n"
             f"📦 {format_size(downloaded)} / {format_size(total_size)}\n"
             f"⚡ {format_size(speed)}/s\n"
-            f"⏱️ ETA: {int(eta)}s"
+            f"⏱️ ETA: {int(eta)}s\n\n"
+            "🛑 Send /cancel to stop"
         )
         await message.edit_text(text, parse_mode='Markdown')
     except (BadRequest, TimedOut):
