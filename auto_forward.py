@@ -118,6 +118,7 @@ async def forward_file_to_channel(context, user, file_message):
                             "file_size": file_size,
                             "duration": duration,
                             "caption": file_message.caption or "",
+                            "fallback_file_id": file_id,  # NEW: help poster fallback build a frame
                         }
                         await post_preview_to_channel(context, forwarded_msg, meta)
                         logger.info("📢 Auto-post preview triggered.")
@@ -204,5 +205,5 @@ async def test_auto_forward(context, chat_id):
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"❌ **Auto-Forward Test Error**\n\nUnexpected error: {str(e)}"
-            )
-            
+                    )
+                    
