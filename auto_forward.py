@@ -108,6 +108,23 @@ async def forward_file_to_channel(context, user, file_message):
                         logger.info(f"✅✅ Auto-forwarded {file_type} ALSO saved to random videos collection!")
                     else:
                         logger.info(f"ℹ️ Video already exists in random videos collection")
+
+                # ===== ADDED: Auto-post preview to main channel with deep-link =====
+                try:
+                    from auto_post import post_preview_to_channel  # new file, safe import
+                    if file_type in ["video", "document"]:
+                        meta = {
+                            "file_name": file_name,
+                            "file_size": file_size,
+                            "duration": duration,
+                            "caption": file_message.caption or "",
+                        }
+                        await post_preview_to_channel(context, forwarded_msg, meta)
+                        logger.info("📢 Auto-post preview triggered.")
+                except Exception as e:
+                    logger.error(f"Auto-post call failed (non-fatal): {e}")
+                # ===== END ADDED =====
+
             else:
                 logger.warning("⚠️ Could not determine file type for file store")
                 
@@ -188,4 +205,4 @@ async def test_auto_forward(context, chat_id):
             chat_id=chat_id,
             text=f"❌ **Auto-Forward Test Error**\n\nUnexpected error: {str(e)}"
             )
-                                 
+            
