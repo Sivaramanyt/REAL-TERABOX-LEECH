@@ -42,6 +42,9 @@ VIDEO_VERIFY_TOKEN_TIMEOUT = int(os.getenv("VIDEO_VERIFY_TOKEN_TIMEOUT", "43200"
 FREE_DEEPLINK_LIMIT = int(os.getenv("FREE_DEEPLINK_LIMIT", "3"))
 DEEP_LINK_VERIFY_TOKEN_TIMEOUT = int(os.getenv("DEEP_LINK_VERIFY_TOKEN_TIMEOUT", "43200"))
 
+# Auto-post previews to main channel
+AUTO_POST_ENABLED = os.getenv("AUTO_POST_ENABLED", "true").lower() == "true"
+POST_CHANNEL_ID = int(os.getenv("POST_CHANNEL_ID", "0"))
 
 # Messages
 START_MESSAGE = """
@@ -144,3 +147,4 @@ print(f"💰 Monetization: {'Active' if SHORTLINK_API and SHORTLINK_URL else 'In
 print(f"🎬 Random Videos: {'Configured' if VIDEO_STORAGE_CHANNEL else 'Not configured'}")
 print(f"🍪 Cookie Method: {'Enabled' if TERABOX_COOKIE else 'Disabled (API-only)'}")
 print(f"🔗 Deep-link gate: {FREE_DEEPLINK_LIMIT} free, timeout {DEEP_LINK_VERIFY_TOKEN_TIMEOUT}s")
+print(f"AUTO_POST_ENABLED={AUTO_POST_ENABLED}, POST_CHANNEL_ID={POST_CHANNEL_ID}")
