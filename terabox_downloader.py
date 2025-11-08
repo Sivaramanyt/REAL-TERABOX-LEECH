@@ -1,10 +1,11 @@
 """
-Terabox Downloader - video-first uploads with safe segmentation, robust headers,
+Terabox Downloader - video-first uploads with size-aware segmentation, robust headers,
 cancel support, and throughput tuning.
 """
 
 import os
 import glob
+import math
 import logging
 import time
 import subprocess
@@ -19,18 +20,25 @@ from terabox_api import format_size
 
 logger = logging.getLogger(__name__)
 
-# ===== Tunables (use env to tweak without code edits) =====
+# ===== Tunables (env overrides) =====
 DOWNLOAD_DIR = "downloads"
-CHUNK_SIZE = int(os.getenv("DOWNLOAD_CHUNK_KB", "768")) * 1024      # 768 KB default (good throughput) [env]
-PROGRESS_INTERVAL_SEC = int(os.getenv("PROGRESS_INTERVAL_SEC", "8")) # edit progress every 8s [env]
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024                               # 2GB cap
+CHUNK_SIZE = int(os.getenv("DOWNLOAD_CHUNK_KB", "768")) * 1024          # default 768 KB
+PROGRESS_INTERVAL_SEC = int(os.getenv("PROGRESS_INTERVAL_SEC", "8"))    # progress every 8s
+MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024                                  # 2GB
 VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
 
-# Video-first policy (no document fallback)
-FORCE_VIDEO_UPLOAD = os.getenv("FORCE_VIDEO_UPLOAD", "true").lower() == "true"       # keep video always [env]
-DISABLE_THUMBNAIL = os.getenv("DISABLE_THUMBNAIL", "true").lower() == "true"         # avoid ffmpeg spikes [env]
-VIDEO_SEGMENT_THRESHOLD_MB = int(os.getenv("VIDEO_SEGMENT_THRESHOLD_MB", "300"))     # segment when >= 300MB [env]
-VIDEO_SEGMENT_TIME_SEC = int(os.getenv("VIDEO_SEGMENT_TIME_SEC", "360"))             # ~6 min per segment [env]
+# Video-only policy
+FORCE_VIDEO_UPLOAD = True  # keep video path strictly [no document fallback]
+DISABLE_THUMBNAIL = True   # avoid ffmpeg spikes
+
+# Size-aware segmentation targets
+BOT_API_MAX_MB = int(os.getenv("BOT_API_MAX_MB", "49"))                  # safe cap below 50 MB
+SEGMENT_SAFETY_MB = int(os.getenv("SEGMENT_SAFETY_MB", "2"))            # margin under cap
+MIN_SEG_TIME_SEC = int(os.getenv("MIN_SEG_TIME_SEC", "60"))             # not too tiny
+MAX_SEG_TIME_SEC = int(os.getenv("MAX_SEG_TIME_SEC", "900"))            # not too long
+
+# If the whole file >= threshold, segment; else upload in one piece
+VIDEO_SEGMENT_THRESHOLD_MB = int(os.getenv("VIDEO_SEGMENT_THRESHOLD_MB", "50"))  # trigger near cap
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -43,7 +51,6 @@ def create_progress_bar(percentage: float) -> str:
     return '█' * filled + '░' * empty
 
 async def update_progress(message, downloaded, total_size, start_time):
-    """Edit a progress message at a controlled interval to reduce backpressure."""
     try:
         if total_size == 0:
             return
@@ -70,49 +77,68 @@ def _open_part(base_path: str, idx: int):
     part_path = f"{base_path}.part{idx:02d}"
     return part_path, open(part_path, "wb")
 
-def _segment_output_paths(base_name: str) -> List[str]:
-    # e.g., movie.mp4 -> movie_seg000.mp4, movie_seg001.mp4, ...
-    root, ext = os.path.splitext(base_name)
-    pattern = os.path.join(DOWNLOAD_DIR, f"{root}_seg%03d.mp4")
-    glob_pattern = os.path.join(DOWNLOAD_DIR, f"{root}_seg*.mp4")
-    return pattern, glob_pattern
-
-def segment_video(input_path: str, segment_time_sec: int) -> List[str]:
-    """
-    Split video into valid MP4 chunks without re-encoding using ffmpeg segmenter.
-    Returns list of segment file paths.
-    """
+def ffprobe_duration_seconds(path: str) -> Optional[float]:
     try:
-        base_name = os.path.basename(input_path)
-        out_pattern, glob_pattern = _segment_output_paths(base_name)
-
-        # Cleanup any old segments
-        for old in glob.glob(glob_pattern):
-            try: os.remove(old)
-            except: pass
-
-        cmd = [
-            'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
-            '-i', input_path,
-            '-c', 'copy',              # no re-encode = low CPU/RAM
-            '-map', '0',
-            '-f', 'segment',
-            '-segment_time', str(segment_time_sec),
-            '-reset_timestamps', '1',
-            out_pattern
-        ]
-        logger.info(f"🎬 Segmenting video: {' '.join(cmd)}")
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
+        res = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20
+        )
         if res.returncode != 0:
-            raise Exception(f"ffmpeg segment failed: {res.stderr.decode(errors='ignore')[:400]}")
+            return None
+        return float(res.stdout.decode().strip())
+    except Exception:
+        return None
 
-        paths = sorted(glob.glob(glob_pattern))
-        if not paths:
-            raise Exception("ffmpeg produced no segments")
-        logger.info(f"✅ Segments ready: {len(paths)} parts")
-        return paths
-    except Exception as e:
-        raise Exception(f"Segment error: {str(e)}")
+def calc_segment_time_for_size(file_path: str, target_mb: int, safety_mb: int) -> int:
+    """
+    Compute segment_time (seconds) so each MP4 part ≲ (target_mb - safety_mb).
+    Uses bitrate estimate = size/duration; clamps between MIN_SEG_TIME_SEC..MAX_SEG_TIME_SEC.
+    """
+    file_size = os.path.getsize(file_path)  # bytes
+    duration = ffprobe_duration_seconds(file_path) or 0
+    if duration <= 0:
+        # Fallback to a conservative default (≈4 min)
+        return max(MIN_SEG_TIME_SEC, min(MAX_SEG_TIME_SEC, 240))
+
+    bytes_per_sec = file_size / duration
+    target_bytes = (target_mb - safety_mb) * 1024 * 1024
+    seg_time = int(max(1, target_bytes / max(1, bytes_per_sec)))
+    seg_time = max(MIN_SEG_TIME_SEC, min(MAX_SEG_TIME_SEC, seg_time))
+    return seg_time
+
+def segment_video_by_time(input_path: str, segment_time_sec: int) -> List[str]:
+    """
+    Split video into valid MP4 chunks without re-encoding (copy), based on time.
+    """
+    root = os.path.splitext(os.path.basename(input_path))[0]
+    out_pattern = os.path.join(DOWNLOAD_DIR, f"{root}_seg%03d.mp4")
+    glob_pattern = os.path.join(DOWNLOAD_DIR, f"{root}_seg*.mp4")
+
+    # Cleanup any old segments
+    for old in glob.glob(glob_pattern):
+        try: os.remove(old)
+        except: pass
+
+    cmd = [
+        'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+        '-i', input_path,
+        '-c', 'copy', '-map', '0',
+        '-f', 'segment',
+        '-segment_time', str(segment_time_sec),
+        '-reset_timestamps', '1',
+        out_pattern
+    ]
+    logger.info(f"🎬 Segmenting video: {' '.join(cmd)}")
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
+    if res.returncode != 0:
+        raise Exception(f"ffmpeg segment failed: {res.stderr.decode(errors='ignore')[:400]}")
+
+    paths = sorted(glob.glob(glob_pattern))
+    if not paths:
+        raise Exception("ffmpeg produced no segments")
+    logger.info(f"✅ Segments ready: {len(paths)} parts")
+    return paths
 
 async def download_file(
     url: str,
@@ -120,13 +146,9 @@ async def download_file(
     status_message=None,
     referer: Optional[str] = None,
     cancel_event=None,
-    split_enabled: bool = False,   # byte-split kept for non-video paths; video uses segmentation after download
+    split_enabled: bool = False,   # keep False for videos so we can segment by time after full download
     split_part_mb: int = 200
 ) -> str | list[str]:
-    """
-    Stream download with browser-like headers, Referer, cancel support, optional on-disk byte splitting.
-    For video-first uploads, keep split_enabled=False so the full file exists for ffmpeg segmentation.
-    """
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     base_path = os.path.join(DOWNLOAD_DIR, filename)
 
@@ -135,20 +157,17 @@ async def download_file(
     last_err = None
 
     def try_request(headers):
-        return requests.get(
-            url, headers=headers, stream=True,
-            timeout=(30, 300), allow_redirects=True
-        )
+        return requests.get(url, headers=headers, stream=True, timeout=(30, 300), allow_redirects=True)
 
     for r in referer_chain:
         headers = {
             "User-Agent": DEFAULT_UA,
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "identity",   # prefer raw stream for big files
+            "Accept-Encoding": "identity",
             "Connection": "keep-alive",
             "Referer": r,
-            "Range": "bytes=0-",             # probe to satisfy hotlink checks
+            "Range": "bytes=0-",
         }
         try:
             resp = try_request(headers)
@@ -158,7 +177,7 @@ async def download_file(
                 continue
             resp.raise_for_status()
 
-            # Reopen without Range to improve throughput after validation
+            # Reopen without Range for better throughput
             headers_no_range = dict(headers); headers_no_range.pop("Range", None)
             try:
                 resp2 = try_request(headers_no_range)
@@ -235,7 +254,7 @@ async def download_file(
             last_err = str(e)
             logger.warning(f"attempt with Referer={r} failed: {e}")
 
-        # Cleanup partials before next referer attempt
+        # Cleanup partials before retry
         try:
             if split_enabled:
                 base_dir = os.path.dirname(base_path)
@@ -254,8 +273,9 @@ async def download_file(
 
 async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE, file_path, caption):
     """
-    Pure video path: sendVideo for small/medium files; for large files, first segment into valid MP4s
-    and send each segment via sendVideo. No document fallback to honor video-only requirement.
+    Video-only path:
+    - If file >= ~50 MB, compute a segment_time that yields ≤ ~49 MB parts and send each via sendVideo.
+    - If file < ~50 MB, sendVideo directly (no thumbnail) to avoid 413 and memory spikes.
     """
     try:
         if not os.path.exists(file_path):
@@ -266,45 +286,45 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         is_video = any(file_path.lower().endswith(ext) for ext in VIDEO_EXTENSIONS)
         if not is_video:
-            # If non-video, still send as document (can’t be video)
             with open(file_path, 'rb') as f:
-                sent = await update.message.reply_document(
+                return await update.message.reply_document(
                     document=f, caption=caption, read_timeout=300, write_timeout=300
                 )
-            return sent
 
-        # 1) Large video -> segment to valid MP4 chunks, then sendVideo for each
-        if file_size >= VIDEO_SEGMENT_THRESHOLD_MB * 1024 * 1024:
-            seg_paths = segment_video(file_path, VIDEO_SEGMENT_TIME_SEC)
+        threshold_bytes = VIDEO_SEGMENT_THRESHOLD_MB * 1024 * 1024
+        if file_size >= threshold_bytes:
+            # Size-aware segmentation to keep parts <= BOT_API_MAX_MB
+            seg_time = calc_segment_time_for_size(file_path, BOT_API_MAX_MB, SEGMENT_SAFETY_MB)
+            seg_paths = segment_video_by_time(file_path, seg_time)
             last_sent = None
-            total_parts = len(seg_paths)
+            total = len(seg_paths)
             idx = 1
             for p in seg_paths:
+                # sanity check size
+                if os.path.getsize(p) >= (BOT_API_MAX_MB * 1024 * 1024):
+                    # if any part still exceeds target, resegment with smaller time
+                    smaller = max(MIN_SEG_TIME_SEC, seg_time // 2)
+                    seg_paths = segment_video_by_time(file_path, smaller)
+                    total = len(seg_paths)
+                    idx = 1
+
                 with open(p, 'rb') as f:
-                    part_caption = f"{caption}\n🧩 Part {idx}/{total_parts}"
+                    part_caption = f"{caption}\n🧩 Part {idx}/{total}"
                     last_sent = await update.message.reply_video(
                         video=f, caption=part_caption, supports_streaming=True,
                         read_timeout=300, write_timeout=300
                     )
-                # cleanup segment immediately
                 try: os.remove(p)
                 except: pass
                 idx += 1
             return last_sent
 
-        # 2) Small/medium video -> sendVideo directly (no thumbnail to avoid OOM)
-        thumb_path = None
-        try:
-            with open(file_path, 'rb') as f:
-                sent = await update.message.reply_video(
-                    video=f, caption=caption, supports_streaming=True,
-                    read_timeout=300, write_timeout=300
-                )
-            return sent
-        finally:
-            if thumb_path and os.path.exists(thumb_path):
-                try: os.remove(thumb_path)
-                except: pass
+        # Small/medium: send as video (no thumbnail to avoid OOM/413 inflation)
+        with open(file_path, 'rb') as f:
+            return await update.message.reply_video(
+                video=f, caption=caption, supports_streaming=True,
+                read_timeout=300, write_timeout=300
+            )
 
     except (TimedOut, NetworkError) as e:
         raise Exception(f"Upload failed: Network issue - {str(e)}")
@@ -312,11 +332,9 @@ async def upload_to_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE,
         raise Exception(f"Upload error: {str(e)}")
 
 def cleanup_file(file_path):
-    """Delete downloaded file or part to save disk."""
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
             logger.info(f"🗑️ Cleaned up: {file_path}")
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
-        
