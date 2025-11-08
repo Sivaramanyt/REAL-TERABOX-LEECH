@@ -28,6 +28,8 @@ from messages import (
     get_user_stats_message
 )
 
+from start_hooks import handle_start_v_param, handle_start_dl_param  # ADDED
+
 logger = logging.getLogger(__name__)
 
 # ===== DASHBOARD CALLBACK HANDLER =====
@@ -170,6 +172,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User ID: {user_id}")
     logger.info(f"Arguments: {context.args}")
 
+    # ===== ADDED: Deep-link delivery and verification return branches =====
+    if context.args and len(context.args) > 0:  # ADDED
+        arg0 = context.args[0]                 # ADDED
+        # 1) Channel poster deep-link delivery: v_<message_id>  (3 free then verify)  # ADDED
+        handled = await handle_start_v_param(update, context, arg0)  # ADDED
+        if handled:                                                   # ADDED
+            return                                                     # ADDED
+        # 2) Deep-link verification completion: dl_<token>             # ADDED
+        handled = await handle_start_dl_param(update, context, arg0)  # ADDED
+        if handled:                                                   # ADDED
+            return       
     # Check if user came from verification link
     if context.args:
         full_token = extract_token_from_start(context.args[0])
