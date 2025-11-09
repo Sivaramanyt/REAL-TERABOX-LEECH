@@ -18,7 +18,14 @@ from telegram.ext import ContextTypes
 from telegram.error import BadRequest, TimedOut, NetworkError
 
 # You have this util already
-from teraboxapi import formatsize
+def formatsize(n: int | float) -> str:
+    n = float(n or 0)
+    for u in ["B", "KB", "MB", "GB", "TB"]:
+        if n < 1024:
+            return f"{n:.1f} {u}"
+        n /= 1024
+    return f"{n:.1f} PB"
+    
 
 logger = logging.getLogger(__name__)
 
