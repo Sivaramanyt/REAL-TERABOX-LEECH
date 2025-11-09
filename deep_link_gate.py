@@ -1,14 +1,13 @@
-# deep_link_gate.py
 """
 Deep-link gate for auto-post clicks:
 - 3 free deliveries per user per day (configurable)
 - On 4th+, require monetized verification
 - On success, unlock unlimited deep-link deliveries (until expiry)
-This file is self-contained and only uses public functions you already expose.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import (
@@ -18,29 +17,21 @@ from config import (
     DEEP_LINK_VERIFY_TOKEN_TIMEOUT,
 )
 
-# Import only the DB helpers we need. We do not modify database.py.
 from database import db, get_user_data
-
-# Reuse existing verification helpers without touching verification.py
 from verification import generate_verify_token, create_universal_shortlink
 
 logger = logging.getLogger(__name__)
 
-# --- Local collection shortcuts (no schema change to existing docs for other features)
 users_collection = db["users"]
 
-# Field names used for deep-link gating (kept separate from leech/video)
 DL_ATTEMPTS = "deep_link_attempts"
 DL_IS_VERIFIED = "is_deep_link_verified"
 DL_VERIFY_TOKEN = "deep_link_verify_token"
 DL_TOKEN_EXPIRY = "deep_link_token_expiry"
 DL_VERIFY_EXPIRY = "deep_link_verify_expiry"
-DL_LAST_RESET = "last_deep_link_reset"  # optional daily reset field
-
-# --- Helpers
+DL_LAST_RESET = "last_deep_link_reset"
 
 def _ensure_user_defaults(user_id: int):
-    """Add deep-link fields to user doc if missing, without altering other logic."""
     now = datetime.utcnow()
     users_collection.update_one(
         {"user_id": user_id},
@@ -56,7 +47,6 @@ def _ensure_user_defaults(user_id: int):
     )
 
 def _reset_if_new_day(user_id: int):
-    """Simple UTC-day reset for the deep-link attempts, independent of your IST resets."""
     doc = users_collection.find_one({"user_id": user_id}, {DL_LAST_RESET: 1})
     now = datetime.utcnow()
     if not doc or not doc.get(DL_LAST_RESET):
@@ -121,14 +111,7 @@ def build_deep_link_verification_link(token: str) -> str:
     short = create_universal_shortlink(tg)
     return short or tg
 
-# --- Entry points to use in handlers and auto-post
-
 async def deliver_or_gate_deeplink(update, context, msg_id: int):
-    """
-    Called from start v_<msg_id> branch:
-    - If under free limit or verified: copy original and increment attempts
-    - Else: send monetized verification button
-    """
     user_id = update.effective_user.id
     _ensure_user_defaults(user_id)
 
@@ -152,17 +135,22 @@ async def deliver_or_gate_deeplink(update, context, msg_id: int):
             await update.message.reply_text("❌ Could not deliver the file. Please try again.")
         return
 
-    # Free limit exceeded -> send verification link
+    # ===== EDITED: add extra buttons to the verification prompt =====
     tok = generate_verify_token()
-    exp = datetime.utcnow().timestamp() + DEEP_LINK_VERIFY_TOKEN_TIMEOUT
-    from datetime import timedelta
     expiry_dt = datetime.utcnow() + timedelta(seconds=DEEP_LINK_VERIFY_TOKEN_TIMEOUT)
     set_deep_link_verification_token(user_id, tok, expiry_dt)
     vlink = build_deep_link_verification_link(tok)
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Verify Now", url=vlink)],
+        [InlineKeyboardButton("📺 HOW TO VERIFY 🤔", url="https://t.me/Sr_Movie_Links/52")],
+        [InlineKeyboardButton("ANY HELP", url="https://t.me/Siva9789")],
+    ]
     await update.message.reply_text(
         "🔒 Free limit reached for channel links.\nComplete verification to continue:",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Verify Now", url=vlink)]])
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    # ===== END EDIT =====
 
 async def complete_deeplink_verification(update, context, token: str):
     user_id = verify_deep_link_token(token)
@@ -170,3 +158,4 @@ async def complete_deeplink_verification(update, context, token: str):
         await update.message.reply_text("✅ Verification successful! Unlimited channel-link downloads enabled.")
     else:
         await update.message.reply_text("❌ Verification failed or expired. Please try again.")
+    
