@@ -6,23 +6,19 @@ import tempfile
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from config import AUTO_POST_ENABLED, POST_CHANNEL_ID, BOT_USERNAME
 from deep_link_gate import build_deep_link_for_message
-
-# ADDED: rotating hook lines
-from hooks import pick_hook  # NEW
+from hooks import pick_hook  # rotating simple hooks
 
 logger = logging.getLogger(__name__)
 
 def _mk_caption(meta: dict, deep_link: str) -> str:
-    # ADDED: hook + removed duration
-    hook = pick_hook()  # NEW
+    hook = pick_hook()
     title = meta.get("file_name") or (meta.get("caption") or "").strip() or "Exclusive Video"
     size = meta.get("file_size")
     size_txt = f"{(size or 0) / (1024*1024):.1f} MB" if size else "—"
-
     return "\n".join([
-        f"{hook}",                                  # NEW
+        f"{hook}",
         f"🎬 {title}",
-        f"📦 {size_txt}",                            # CHANGED: no duration here
+        f"📦 {size_txt}",
         "",
         f"👉 Tap here to watch: {deep_link}",
     ])
@@ -37,6 +33,27 @@ async def _run_ffmpeg_frame(input_path: str) -> str | None:
         return out if os.path.exists(out) else None
     except Exception:
         return None
+
+# NEW: try two offsets (1s, then 3s) to increase success when the first keyframe is late
+async def _extract_frame_two_attempts(input_path: str) -> str | None:
+    out1 = os.path.join(tempfile.gettempdir(), f"thumb1_{os.getpid()}.jpg")
+    out2 = os.path.join(tempfile.gettempdir(), f"thumb2_{os.getpid()}.jpg")
+    try:
+        cmd1 = ["ffmpeg", "-y", "-ss", "1", "-i", input_path, "-frames:v", "1", "-q:v", "5", out1]
+        p1 = await asyncio.create_subprocess_exec(*cmd1,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await p1.communicate()
+        if os.path.exists(out1):
+            return out1
+        cmd2 = ["ffmpeg", "-y", "-ss", "3", "-i", input_path, "-frames:v", "1", "-q:v", "5", out2]
+        p2 = await asyncio.create_subprocess_exec(*cmd2,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await p2.communicate()
+        if os.path.exists(out2):
+            return out2
+    except Exception:
+        return None
+    return None
 
 async def _download_small(context, file_id: str, max_bytes: int = 12_000_000) -> str | None:
     try:
@@ -78,11 +95,9 @@ async def post_preview_to_channel(context, forwarded_msg, meta: dict):
     try:
         deep = build_deep_link_for_message(forwarded_msg.message_id)
         caption = _mk_caption(meta, deep)
-
-        # CHANGED: button text
         rm = InlineKeyboardMarkup([[InlineKeyboardButton("🥵WATCH NOW💦", url=deep)]])
 
-        # Step 1: Inline thumbnail from Telegram
+        # Step 1: Try Telegram inline thumbnail
         thumb_file_id = _pick_inline_thumb(forwarded_msg)
         logger.info(
             f"Poster inline thumb: {bool(thumb_file_id)} | "
@@ -102,7 +117,7 @@ async def post_preview_to_channel(context, forwarded_msg, meta: dict):
             file_id = forwarded_msg.video.file_id
         elif getattr(forwarded_msg, "document", None):
             try:
-                size_ok = (getattr(forwarded_msg.document, "file_size", 0) or 0) <= 15_000_000
+                size_ok = (getattr(forwarded_msg.document, "file_size", 0) or 0) <= 45_000_000  # raised to 45 MB
             except Exception:
                 size_ok = False
             if size_ok:
@@ -117,7 +132,8 @@ async def post_preview_to_channel(context, forwarded_msg, meta: dict):
         if file_id:
             tmp_path = await _download_small(context, file_id, max_bytes=12_000_000)
             if tmp_path:
-                jpg = await _run_ffmpeg_frame(tmp_path)
+                # Try 1s then 3s for higher success
+                jpg = await _extract_frame_two_attempts(tmp_path)
                 try:
                     os.remove(tmp_path)
                 except Exception:
@@ -142,4 +158,4 @@ async def post_preview_to_channel(context, forwarded_msg, meta: dict):
     except Exception as e:
         logger.error(f"❌ Auto-post error: {e}")
         return False
-        
+                
