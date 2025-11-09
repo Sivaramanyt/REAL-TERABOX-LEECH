@@ -1,25 +1,24 @@
 FROM python:3.11-slim
 
-# Set working directory
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 
-# Install system dependencies including FFmpeg, FFprobe, and wget
+# Install ffmpeg and runtime deps
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    ffmpeg \
-    wget \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends ffmpeg ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python deps first for better layer caching
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy application code
-COPY . .
+# Copy app code
+COPY . /app
 
-# Expose port for health check
-EXPOSE 8000
+# Optional: sanity check (remove if not needed)
+# RUN ffmpeg -version
 
-# Run the bot
+EXPOSE 8080
 CMD ["python", "main.py"]
