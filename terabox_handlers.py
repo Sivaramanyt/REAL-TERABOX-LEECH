@@ -43,6 +43,7 @@ TERABOX_PATTERN = re.compile(
     r'https?://(?:www\.)?(?:'
     r'terabox|teraboxapp|1024tera|4funbox|teraboxshare|teraboxurl|1024terabox|'
     r'terafileshare|teraboxlink|terasharelink|terasharefile|terashare'
+    r"freeterabox|momerybox"  # ADDED
     r')\.(?:com|app|fun)'
     r'/(?:s/|share/|wap/share/filelist\?surl=|.+?s/)[^\s<>"]+',
     re.IGNORECASE
@@ -72,10 +73,13 @@ async def resolve_canonical_terabox_url(message_text: str) -> Optional[str]:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(raw_url, allow_redirects=True) as resp:
                 final_url = str(resp.url)
-                mm = TERABOX_PATTERN.search(final_url)
-                if mm:
-                    return mm.group(0)
-
+                final_url = final_url.replace("://freeterabox.com/", "://www.terabox.com/")
+                final_url = final_url.replace("://www.freeterabox.com/", "://www.terabox.com/")
+                final_url = final_url.replace("://momerybox.com/", "://www.terabox.com/")
+                final_url = final_url.replace("://www.momerybox.com/", "://www.terabox.com/")
+                m = TERABOX_PATTERN.search(final_url)
+                if m:
+                    return m.group(0)
                 ctype = resp.headers.get("Content-Type", "")
                 if "text/html" in ctype:
                     body = await resp.text(errors="ignore")
@@ -83,7 +87,12 @@ async def resolve_canonical_terabox_url(message_text: str) -> Optional[str]:
                     if mx:
                         m2 = TERABOX_PATTERN.search(mx.group(0))
                         if m2:
-                            return m2.group(0)
+                            url_norm = m2.group(0)
+    # ADDED: normalize mirrors in fallback body path
+                            url_norm = url_norm.replace("://freeterabox.com/", "://www.terabox.com/").replace("://www.freeterabox.com/", "://www.terabox.com/")
+                            url_norm = url_norm.replace("://momerybox.com/", "://www.terabox.com/").replace("://www.momerybox.com/", "://www.terabox.com/")
+                            return url_norm
+    
     except Exception as e:
         logger.warning(f"resolver fallback failed: {e}")
     return None
