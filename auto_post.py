@@ -7,29 +7,25 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from config import AUTO_POST_ENABLED, POST_CHANNEL_ID, BOT_USERNAME
 from deep_link_gate import build_deep_link_for_message
 
+# ADDED: rotating hook lines
+from hooks import pick_hook  # NEW
+
 logger = logging.getLogger(__name__)
 
 def _mk_caption(meta: dict, deep_link: str) -> str:
-    title = meta.get("file_name") or (meta.get("caption") or "").strip() or "Video"
+    # ADDED: hook + removed duration
+    hook = pick_hook()  # NEW
+    title = meta.get("file_name") or (meta.get("caption") or "").strip() or "Exclusive Video"
     size = meta.get("file_size")
-    dur = meta.get("duration")
     size_txt = f"{(size or 0) / (1024*1024):.1f} MB" if size else "—"
-    dur_txt = f"{int((dur or 0)//60)} min" if dur else "—"
-    return "\n".join([
-        f"🎬 {title}",
-        f"⏱ {dur_txt}   •   📦 {size_txt}",
-        "",
-        f"👉 WATCH NOW: {deep_link}",
-    ])
 
-def _pick_inline_thumb(forwarded_msg) -> str | None:
-    if getattr(forwarded_msg, "video", None) and getattr(forwarded_msg.video, "thumbnail", None):
-        return forwarded_msg.video.thumbnail.file_id
-    if getattr(forwarded_msg, "document", None) and getattr(forwarded_msg.document, "thumbnail", None):
-        return forwarded_msg.document.thumbnail.file_id
-    if getattr(forwarded_msg, "photo", None) and len(forwarded_msg.photo) > 0:
-        return forwarded_msg.photo[-1].file_id
-    return None
+    return "\n".join([
+        f"{hook}",                                  # NEW
+        f"🎬 {title}",
+        f"📦 {size_txt}",                            # CHANGED: no duration here
+        "",
+        f"👉 Tap here to watch: {deep_link}",
+    ])
 
 async def _run_ffmpeg_frame(input_path: str) -> str | None:
     out = os.path.join(tempfile.gettempdir(), f"thumb_{os.getpid()}.jpg")
@@ -65,6 +61,15 @@ async def _download_small(context, file_id: str, max_bytes: int = 12_000_000) ->
         logger.warning(f"Download small error: {e}")
         return None
 
+def _pick_inline_thumb(forwarded_msg) -> str | None:
+    if getattr(forwarded_msg, "video", None) and getattr(forwarded_msg.video, "thumbnail", None):
+        return forwarded_msg.video.thumbnail.file_id
+    if getattr(forwarded_msg, "document", None) and getattr(forwarded_msg.document, "thumbnail", None):
+        return forwarded_msg.document.thumbnail.file_id
+    if getattr(forwarded_msg, "photo", None) and len(forwarded_msg.photo) > 0:
+        return forwarded_msg.photo[-1].file_id
+    return None
+
 async def post_preview_to_channel(context, forwarded_msg, meta: dict):
     if not AUTO_POST_ENABLED or not POST_CHANNEL_ID:
         logger.info("Auto-post disabled or POST_CHANNEL_ID missing")
@@ -73,6 +78,8 @@ async def post_preview_to_channel(context, forwarded_msg, meta: dict):
     try:
         deep = build_deep_link_for_message(forwarded_msg.message_id)
         caption = _mk_caption(meta, deep)
+
+        # CHANGED: button text
         rm = InlineKeyboardMarkup([[InlineKeyboardButton("🥵WATCH NOW💦", url=deep)]])
 
         # Step 1: Inline thumbnail from Telegram
@@ -135,4 +142,4 @@ async def post_preview_to_channel(context, forwarded_msg, meta: dict):
     except Exception as e:
         logger.error(f"❌ Auto-post error: {e}")
         return False
-    
+        
