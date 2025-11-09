@@ -19,7 +19,7 @@ def _mk_caption(meta: dict, deep_link: str) -> str:
         f"🎬 {title}",
         f"⏱ {dur_txt}   •   📦 {size_txt}",
         "",
-        f"👉 Get it on bot: {deep_link}",
+        f"👉 WATCH NOW: {deep_link}",
     ])
 
 def _pick_inline_thumb(forwarded_msg) -> str | None:
@@ -73,7 +73,7 @@ async def post_preview_to_channel(context, forwarded_msg, meta: dict):
     try:
         deep = build_deep_link_for_message(forwarded_msg.message_id)
         caption = _mk_caption(meta, deep)
-        rm = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Get on bot", url=deep)]])
+        rm = InlineKeyboardMarkup([[InlineKeyboardButton("🥵WATCH NOW💦", url=deep)]])
 
         # Step 1: Inline thumbnail from Telegram
         thumb_file_id = _pick_inline_thumb(forwarded_msg)
