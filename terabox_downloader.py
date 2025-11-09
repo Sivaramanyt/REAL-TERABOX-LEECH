@@ -237,7 +237,23 @@ async def download_file(
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     basepath = os.path.join(DOWNLOAD_DIR, filename)
 
-    referer_chain = [r for r in [referer, "http://teraboxapp.com", "https://www.terabox.com", "https://1024tera.com"] if r]
+    # ADDED: normalize mirror hosts to canonical before any requests
+    if isinstance(url, str):
+        url = url.replace("://freeterabox.com/", "://www.terabox.com/")
+        url = url.replace("://www.freeterabox.com/", "://www.terabox.com/")
+        url = url.replace("://momerybox.com/", "://www.terabox.com/")
+        url = url.replace("://www.momerybox.com/", "://www.terabox.com/")
+
+    # ADDED: include mirrors in referer chain (order preserved)
+    referer_chain = [r for r in [
+        referer,
+        "http://teraboxapp.com",
+        "https://www.terabox.com",
+        "https://1024tera.com",
+        "https://nephobox.com",
+        "https://freeterabox.com",   # ADDED
+        "https://momerybox.com",     # ADDED
+    ] if r]
 
     part_limit = split_part_mb * 1024 * 1024
     last_err = None
