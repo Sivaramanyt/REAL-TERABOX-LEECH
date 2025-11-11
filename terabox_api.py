@@ -6,6 +6,7 @@ from urllib.parse import urlparse, quote_plus
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
 def _resolve_short(url: str, referer: str) -> str:
+    """Expand short/redirect URLs to final CDN location."""
     try:
         with requests.Session() as s:
             s.headers.update({"User-Agent": UA, "Accept": "*/*", "Referer": referer})
@@ -15,13 +16,20 @@ def _resolve_short(url: str, referer: str) -> str:
         return url
 
 def _probe_head(url: str, referer: str) -> bool:
+    """Verify the URL points to a real file via HEAD."""
     try:
         with requests.Session() as s:
-            s.headers.update({"User-Agent": UA, "Accept": "*/*", "Referer": referer, "Accept-Encoding": "identity"})
+            s.headers.update({
+                "User-Agent": UA,
+                "Accept": "*/*",
+                "Referer": referer,
+                "Accept-Encoding": "identity"
+            })
             r = s.head(url, allow_redirects=True, timeout=(15, 30))
             if r.status_code in (200, 206):
                 cl = r.headers.get("content-length")
                 disp = r.headers.get("content-disposition", "")
+                # Must have content-length or disposition to be a real file
                 return bool(cl or disp)
     except Exception:
         pass
@@ -30,10 +38,11 @@ def _probe_head(url: str, referer: str) -> bool:
 def _humanize_size(b: int) -> str:
     try:
         b = int(b)
-        if b <= 0: return "Unknown"
-        units = ["B","KB","MB","GB","TB"]
+        if b <= 0:
+            return "Unknown"
+        units = ["B", "KB", "MB", "GB", "TB"]
         i = 0
-        while b >= 1024 and i < len(units)-1:
+        while b >= 1024 and i < len(units) - 1:
             b /= 1024.0
             i += 1
         return f"{b:.2f} {units[i]}" if units[i] != "B" else f"{int(b)} {units[i]}"
@@ -64,12 +73,18 @@ def _parse_wdzone_payload(text: str):
     """
     try:
         data = json.loads(text)
+        # Folder shapes
         for k in ("files", "folder", "📁 Folder", "items"):
             if k in data and isinstance(data[k], list):
                 out = []
                 for it in data[k]:
                     name = it.get("name") or it.get("file_name") or "TeraboxFile"
-                    direct = it.get("direct_link") or it.get("🔗 ShortLink") or it.get("shortlink") or it.get("url")
+                    direct = (
+                        it.get("direct_link")
+                        or it.get("🔗 ShortLink")
+                        or it.get("shortlink")
+                        or it.get("url")
+                    )
                     size = it.get("sizebytes") or it.get("size") or 0
                     if direct:
                         out.append({
@@ -78,19 +93,42 @@ def _parse_wdzone_payload(text: str):
                             "sizebytes": int(size) if str(size).isdigit() else 0
                         })
                 return out if out else None
+
+        # Single-file shapes (emoji and plain)
         info = data.get("Extracted Info") or data.get("📜 Extracted Info") or {}
-        name = data.get("file_name") or data.get("name") or (info.get("name") if isinstance(info, dict) else None) or "TeraboxFile"
-        size = data.get("sizebytes") or data.get("size") or (info.get("size") if isinstance(info, dict) else 0)
-        direct = data.get("direct_link") or data.get("🔗 ShortLink") or data.get("shortlink") or data.get("url")
+        name = (
+            data.get("file_name")
+            or data.get("name")
+            or (info.get("name") if isinstance(info, dict) else None)
+            or "TeraboxFile"
+        )
+        size = (
+            data.get("sizebytes")
+            or data.get("size")
+            or (info.get("size") if isinstance(info, dict) else 0)
+        )
+        direct = (
+            data.get("direct_link")
+            or data.get("🔗 ShortLink")
+            or data.get("shortlink")
+            or data.get("url")
+        )
         if direct:
-            return {"name": name, "direct_link": direct, "sizebytes": int(size) if str(size).isdigit() else 0}
+            return {
+                "name": name,
+                "direct_link": direct,
+                "sizebytes": int(size) if str(size).isdigit() else 0
+            }
     except Exception:
         pass
+
+    # Plain text/HTML: first URL heuristic
     urls = re.findall(r'(https?://[^\s<>"\)\]]+)', text)
     if urls:
         urls.sort(key=lambda u: 0 if ("terabox" in u or "1024tera" in u or "bdstatic" in u) else 1)
         return {"name": "TeraboxFile", "direct_link": urls[0], "sizebytes": 0}
     return None
+
 
 class TeraboxAPI:
     def __init__(self):
@@ -114,6 +152,7 @@ class TeraboxAPI:
             resp.raise_for_status()
         except Exception as e:
             raise Exception(f"Primary API request failed: {e}")
+
         try:
             data = resp.json()
         except Exception as e:
@@ -126,7 +165,9 @@ class TeraboxAPI:
             raise Exception("Primary API: direct_link missing")
 
         final_url = _resolve_short(direct, referer=url)
-        _probe_head(final_url, referer=url)
+        if not _probe_head(final_url, referer=url):
+            raise Exception("Primary API: HEAD validation failed (not a real file)")
+
         return [_normalize_file_item(name, final_url, int(size) if str(size).isdigit() else 0)]
 
     def extract_with_wdzone(self, url: str) -> list[dict]:
@@ -151,16 +192,20 @@ class TeraboxAPI:
 
         items: list[dict] = []
         if isinstance(parsed, list):
+            # Folder case
             for it in parsed:
                 final_url = _resolve_short(it["direct_link"], referer=url)
-                _probe_head(final_url, referer=url)
+                if not _probe_head(final_url, referer=url):
+                    raise Exception(f"Wdzone: HEAD validation failed for {it['name']}")
                 items.append(_normalize_file_item(it["name"], final_url, it.get("sizebytes", 0)))
             if not items:
                 raise Exception("Wdzone: no files in folder")
             return items
 
+        # Single file
         final_url = _resolve_short(parsed["direct_link"], referer=url)
-        _probe_head(final_url, referer=url)
+        if not _probe_head(final_url, referer=url):
+            raise Exception("Wdzone: HEAD validation failed (not a real file)")
         items.append(_normalize_file_item(parsed["name"], final_url, parsed.get("sizebytes", 0)))
         return items
 
@@ -173,16 +218,19 @@ class TeraboxAPI:
         if _is_folder_link(url):
             files = self.extract_with_wdzone(url)
             return {"files": files}
+
         try:
             files = self.extract_with_primary_api(url)
             if files:
                 return {"files": files}
         except Exception:
             pass
+
         files = self.extract_with_wdzone(url)
         return {"files": files}
+
 
 def extract_terabox_data(url: str) -> dict:
     api = TeraboxAPI()
     return api.extract_terabox_data(url)
-                
+                    
