@@ -1,7 +1,7 @@
 import requests
 import json
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
@@ -93,26 +93,24 @@ def _parse_wdzone_payload(text: str):
     return None
 
 class TeraboxAPI:
-    def __init__(self,
-                 primary_endpoint: str | None = None,
-                 wdzone_endpoint: str | None = None):
-        self.primary_endpoint = primary_endpoint or "https://YOUR-UDAYSCRIPT-ENDPOINT/terabox"
-        self.wdzone_endpoint = wdzone_endpoint or "https://YOUR-WDZONE-ENDPOINT/terabox"
+    def __init__(self):
+        # Your exact endpoints using ?url=
+        self.primary_endpoint = "https://terabox.udayscriptsx.workers.dev/?url="
+        self.wdzone_endpoint = "https://wdzone-terabox-api.vercel.app/api?url="
 
     def extract_with_primary_api(self, url: str) -> list[dict]:
         """
-        Udayscript for single files.
+        Udayscript for single files; GET ?url=<encoded>.
         Expected JSON: { "file_name": "...", "direct_link": "https://...", "sizebytes": 123456 }
         """
+        u = self.primary_endpoint + quote_plus(url)
         try:
-            payload = {"link": url}
             headers = {
                 "User-Agent": UA,
                 "Accept": "application/json",
                 "Referer": url,
-                "Origin": f"{urlparse(url).scheme}://{urlparse(url).hostname}"
             }
-            resp = requests.post(self.primary_endpoint, data=payload, headers=headers, timeout=(20, 40))
+            resp = requests.get(u, headers=headers, timeout=(20, 40))
             resp.raise_for_status()
         except Exception as e:
             raise Exception(f"Primary API request failed: {e}")
@@ -120,37 +118,37 @@ class TeraboxAPI:
             data = resp.json()
         except Exception as e:
             raise Exception(f"Primary API invalid JSON: {e}")
+
         name = data.get("file_name") or data.get("name")
         direct = data.get("direct_link") or data.get("url")
         size = data.get("sizebytes") or data.get("size") or 0
         if not direct:
             raise Exception("Primary API: direct_link missing")
+
         final_url = _resolve_short(direct, referer=url)
         _probe_head(final_url, referer=url)
         return [_normalize_file_item(name, final_url, int(size) if str(size).isdigit() else 0)]
 
     def extract_with_wdzone(self, url: str) -> list[dict]:
         """
-        File or folder extractor; returns [{ name, download_url, size }, ...]
+        File or folder via Wdzone; GET ?url=<encoded>; returns list[{ name, download_url, size }]
         """
+        u = self.wdzone_endpoint + quote_plus(url)
         try:
-            resp = requests.post(
-                self.wdzone_endpoint,
-                data={"link": url},
-                headers={
-                    "User-Agent": UA,
-                    "Accept": "*/*",
-                    "Referer": url,
-                    "Origin": f"{urlparse(url).scheme}://{urlparse(url).hostname}"
-                },
-                timeout=(20, 40)
-            )
+            headers = {
+                "User-Agent": UA,
+                "Accept": "*/*",
+                "Referer": url,
+            }
+            resp = requests.get(u, headers=headers, timeout=(20, 40))
             resp.raise_for_status()
         except Exception as e:
             raise Exception(f"Wdzone request failed: {e}")
+
         parsed = _parse_wdzone_payload(resp.text)
         if not parsed:
             raise Exception("Wdzone: empty/unparseable response")
+
         items: list[dict] = []
         if isinstance(parsed, list):
             for it in parsed:
@@ -160,6 +158,7 @@ class TeraboxAPI:
             if not items:
                 raise Exception("Wdzone: no files in folder")
             return items
+
         final_url = _resolve_short(parsed["direct_link"], referer=url)
         _probe_head(final_url, referer=url)
         items.append(_normalize_file_item(parsed["name"], final_url, parsed.get("sizebytes", 0)))
@@ -186,4 +185,4 @@ class TeraboxAPI:
 def extract_terabox_data(url: str) -> dict:
     api = TeraboxAPI()
     return api.extract_terabox_data(url)
-                            
+                
