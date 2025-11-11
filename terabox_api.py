@@ -1,9 +1,7 @@
-# terabox_api.py — complete file (copy/paste)
-
 import requests
 import json
 import re
-from urllib.parse import urlparse, urlencode
+from urllib.parse import urlparse
 
 # =========================
 # Shared helpers
@@ -116,17 +114,17 @@ class TeraboxAPI:
     def __init__(self,
                  primary_endpoint: str | None = None,
                  wdzone_endpoint: str | None = None):
-        # Provide defaults if not passed; replace with your real endpoints
-        self.primary_endpoint = primary_endpoint or "https://udayscript.example/api/terabox"
-        self.wdzone_endpoint = wdzone_endpoint or "https://wdzone.example/api/terabox"
+        # Replace placeholders with your real endpoints
+        self.primary_endpoint = primary_endpoint or "https://YOUR-UDAYSCRIPT-ENDPOINT/terabox"
+        self.wdzone_endpoint = wdzone_endpoint or "https://YOUR-WDZONE-ENDPOINT/terabox"
 
-    # ---------- Primary extractor: Udayscript (kept first) ----------
+    # ---------- Primary extractor: Udayscript ----------
     def extract_with_primary_api(self, url: str) -> list[dict]:
         """
-        Udayscript/primary API for single files.
+        Udayscript for single files.
         Expected JSON:
           { "file_name": "...", "direct_link": "https://...", "sizebytes": 123456 }
-        Returns list[dict] with keys: name, download_url, size
+        Returns list[{name, download_url, size}]
         """
         try:
             payload = {"link": url}
@@ -146,7 +144,6 @@ class TeraboxAPI:
         except Exception as e:
             raise Exception(f"Primary API invalid JSON: {e}")
 
-        # Typical keys
         name = data.get("file_name") or data.get("name")
         direct = data.get("direct_link") or data.get("url")
         size = data.get("sizebytes") or data.get("size") or 0
@@ -200,7 +197,7 @@ class TeraboxAPI:
         items.append(_normalize_file_item(parsed["name"], final_url, parsed.get("sizebytes", 0)))
         return items
 
-    # ---------- Router with your preferred order ----------
+    # ---------- Router with preferred order ----------
     def extract_terabox_data(self, url: str) -> dict:
         """
         - If folder: use Wdzone directly (folder supported).
