@@ -3,10 +3,6 @@ import json
 import re
 from urllib.parse import urlparse
 
-# =========================
-# Shared helpers
-# =========================
-
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
 def _resolve_short(url: str, referer: str) -> str:
@@ -60,20 +56,14 @@ def _normalize_file_item(name: str, url: str, size_bytes: int | None) -> dict:
         "size": _humanize_size(size_bytes or 0)
     }
 
-# =========================
-# Wdzone tolerant parser
-# =========================
-
 def _parse_wdzone_payload(text: str):
     """
     Accept Wdzone responses as JSON with emoji keys or as plain text/HTML.
     Returns dict for single file or list[dict] for folders, each dict:
       {name, direct_link, sizebytes}
     """
-    # Try JSON
     try:
         data = json.loads(text)
-        # Folder shapes
         for k in ("files", "folder", "📁 Folder", "items"):
             if k in data and isinstance(data[k], list):
                 out = []
@@ -88,8 +78,6 @@ def _parse_wdzone_payload(text: str):
                             "sizebytes": int(size) if str(size).isdigit() else 0
                         })
                 return out if out else None
-
-        # Single-file shapes (emoji and plain)
         info = data.get("Extracted Info") or data.get("📜 Extracted Info") or {}
         name = data.get("file_name") or data.get("name") or (info.get("name") if isinstance(info, dict) else None) or "TeraboxFile"
         size = data.get("sizebytes") or data.get("size") or (info.get("size") if isinstance(info, dict) else 0)
@@ -98,33 +86,23 @@ def _parse_wdzone_payload(text: str):
             return {"name": name, "direct_link": direct, "sizebytes": int(size) if str(size).isdigit() else 0}
     except Exception:
         pass
-
-    # Plain text/HTML: first URL heuristic
     urls = re.findall(r'(https?://[^\s<>"\)\]]+)', text)
     if urls:
         urls.sort(key=lambda u: 0 if ("terabox" in u or "1024tera" in u or "bdstatic" in u) else 1)
         return {"name": "TeraboxFile", "direct_link": urls[0], "sizebytes": 0}
     return None
 
-# =========================
-# Terabox API class
-# =========================
-
 class TeraboxAPI:
     def __init__(self,
                  primary_endpoint: str | None = None,
                  wdzone_endpoint: str | None = None):
-        # Replace placeholders with your real endpoints
         self.primary_endpoint = primary_endpoint or "https://YOUR-UDAYSCRIPT-ENDPOINT/terabox"
         self.wdzone_endpoint = wdzone_endpoint or "https://YOUR-WDZONE-ENDPOINT/terabox"
 
-    # ---------- Primary extractor: Udayscript ----------
     def extract_with_primary_api(self, url: str) -> list[dict]:
         """
         Udayscript for single files.
-        Expected JSON:
-          { "file_name": "...", "direct_link": "https://...", "sizebytes": 123456 }
-        Returns list[{name, download_url, size}]
+        Expected JSON: { "file_name": "...", "direct_link": "https://...", "sizebytes": 123456 }
         """
         try:
             payload = {"link": url}
@@ -138,27 +116,22 @@ class TeraboxAPI:
             resp.raise_for_status()
         except Exception as e:
             raise Exception(f"Primary API request failed: {e}")
-
         try:
             data = resp.json()
         except Exception as e:
             raise Exception(f"Primary API invalid JSON: {e}")
-
         name = data.get("file_name") or data.get("name")
         direct = data.get("direct_link") or data.get("url")
         size = data.get("sizebytes") or data.get("size") or 0
         if not direct:
             raise Exception("Primary API: direct_link missing")
-
         final_url = _resolve_short(direct, referer=url)
         _probe_head(final_url, referer=url)
         return [_normalize_file_item(name, final_url, int(size) if str(size).isdigit() else 0)]
 
-    # ---------- Secondary extractor: Wdzone (improved) ----------
     def extract_with_wdzone(self, url: str) -> list[dict]:
         """
-        File or folder extractor:
-          returns [{ name, download_url, size }, ...]
+        File or folder extractor; returns [{ name, download_url, size }, ...]
         """
         try:
             resp = requests.post(
@@ -175,14 +148,11 @@ class TeraboxAPI:
             resp.raise_for_status()
         except Exception as e:
             raise Exception(f"Wdzone request failed: {e}")
-
         parsed = _parse_wdzone_payload(resp.text)
         if not parsed:
             raise Exception("Wdzone: empty/unparseable response")
-
         items: list[dict] = []
         if isinstance(parsed, list):
-            # Folder case
             for it in parsed:
                 final_url = _resolve_short(it["direct_link"], referer=url)
                 _probe_head(final_url, referer=url)
@@ -190,14 +160,11 @@ class TeraboxAPI:
             if not items:
                 raise Exception("Wdzone: no files in folder")
             return items
-
-        # Single file
         final_url = _resolve_short(parsed["direct_link"], referer=url)
         _probe_head(final_url, referer=url)
         items.append(_normalize_file_item(parsed["name"], final_url, parsed.get("sizebytes", 0)))
         return items
 
-    # ---------- Router with preferred order ----------
     def extract_terabox_data(self, url: str) -> dict:
         """
         - If folder: use Wdzone directly (folder supported).
@@ -207,21 +174,16 @@ class TeraboxAPI:
         if _is_folder_link(url):
             files = self.extract_with_wdzone(url)
             return {"files": files}
-
-        # Non-folder: Udayscript first
         try:
             files = self.extract_with_primary_api(url)
             if files:
                 return {"files": files}
         except Exception:
             pass
-
-        # Fallback to Wdzone
         files = self.extract_with_wdzone(url)
         return {"files": files}
 
-# ---------- Module-level convenience ----------
 def extract_terabox_data(url: str) -> dict:
     api = TeraboxAPI()
     return api.extract_terabox_data(url)
-        
+                            
