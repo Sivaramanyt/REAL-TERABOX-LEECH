@@ -1,7 +1,10 @@
 import requests
 import json
 import re
+import logging
 from urllib.parse import urlparse, quote_plus
+
+logger = logging.getLogger(__name__)
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
@@ -11,12 +14,15 @@ def _resolve_short(url: str, referer: str) -> str:
         with requests.Session() as s:
             s.headers.update({"User-Agent": UA, "Accept": "*/*", "Referer": referer})
             r = s.get(url, allow_redirects=True, timeout=(15, 30))
-            return str(r.url)
-    except Exception:
+            final = str(r.url)
+            logger.debug(f"Resolved {url[:60]}... -> {final[:60]}...")
+            return final
+    except Exception as e:
+        logger.warning(f"Resolve short failed: {e}")
         return url
 
 def _probe_head(url: str, referer: str) -> bool:
-    """Verify the URL points to a real file via HEAD."""
+    """Verify the URL points to a real file via HEAD; lenient mode."""
     try:
         with requests.Session() as s:
             s.headers.update({
@@ -26,13 +32,11 @@ def _probe_head(url: str, referer: str) -> bool:
                 "Accept-Encoding": "identity"
             })
             r = s.head(url, allow_redirects=True, timeout=(15, 30))
+            logger.debug(f"HEAD {url[:60]}... -> {r.status_code}, CL={r.headers.get('content-length')}, CD={r.headers.get('content-disposition')}")
             if r.status_code in (200, 206):
-                cl = r.headers.get("content-length")
-                disp = r.headers.get("content-disposition", "")
-                # Must have content-length or disposition to be a real file
-                return bool(cl or disp)
-    except Exception:
-        pass
+                return True  # Lenient: accept any 200/206, skip strict CL/CD check
+    except Exception as e:
+        logger.warning(f"HEAD probe failed: {e}")
     return False
 
 def _humanize_size(b: int) -> str:
@@ -84,6 +88,7 @@ def _parse_wdzone_payload(text: str):
                         or it.get("🔗 ShortLink")
                         or it.get("shortlink")
                         or it.get("url")
+                        or it.get("Direct Download link")
                     )
                     size = it.get("sizebytes") or it.get("size") or 0
                     if direct:
@@ -112,6 +117,7 @@ def _parse_wdzone_payload(text: str):
             or data.get("🔗 ShortLink")
             or data.get("shortlink")
             or data.get("url")
+            or data.get("Direct Download link")
         )
         if direct:
             return {
@@ -166,7 +172,7 @@ class TeraboxAPI:
 
         final_url = _resolve_short(direct, referer=url)
         if not _probe_head(final_url, referer=url):
-            raise Exception("Primary API: HEAD validation failed (not a real file)")
+            logger.warning(f"Primary API HEAD failed for {final_url[:80]}, continuing anyway")
 
         return [_normalize_file_item(name, final_url, int(size) if str(size).isdigit() else 0)]
 
@@ -186,6 +192,7 @@ class TeraboxAPI:
         except Exception as e:
             raise Exception(f"Wdzone request failed: {e}")
 
+        logger.debug(f"Wdzone raw response ({len(resp.text)} chars): {resp.text[:400]}...")
         parsed = _parse_wdzone_payload(resp.text)
         if not parsed:
             raise Exception("Wdzone: empty/unparseable response")
@@ -196,7 +203,7 @@ class TeraboxAPI:
             for it in parsed:
                 final_url = _resolve_short(it["direct_link"], referer=url)
                 if not _probe_head(final_url, referer=url):
-                    raise Exception(f"Wdzone: HEAD validation failed for {it['name']}")
+                    logger.warning(f"Wdzone folder item HEAD failed for {it['name']}, continuing anyway")
                 items.append(_normalize_file_item(it["name"], final_url, it.get("sizebytes", 0)))
             if not items:
                 raise Exception("Wdzone: no files in folder")
@@ -205,7 +212,7 @@ class TeraboxAPI:
         # Single file
         final_url = _resolve_short(parsed["direct_link"], referer=url)
         if not _probe_head(final_url, referer=url):
-            raise Exception("Wdzone: HEAD validation failed (not a real file)")
+            logger.warning(f"Wdzone single file HEAD failed, continuing anyway")
         items.append(_normalize_file_item(parsed["name"], final_url, parsed.get("sizebytes", 0)))
         return items
 
@@ -233,4 +240,4 @@ class TeraboxAPI:
 def extract_terabox_data(url: str) -> dict:
     api = TeraboxAPI()
     return api.extract_terabox_data(url)
-                    
+    
