@@ -28,7 +28,7 @@ class TeraboxAPI:
         ]
         
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
         }
         
@@ -296,4 +296,37 @@ class TeraboxAPI:
             return f"{size_bytes:.2f} PB"
         except:
             return "Unknown"
-                    
+
+
+# ============================================
+# BACKWARD COMPATIBILITY - Keep old function names
+# ============================================
+
+# Global instance
+_api_instance = None
+
+def get_api_instance():
+    """Get or create API instance"""
+    global _api_instance
+    if _api_instance is None:
+        _api_instance = TeraboxAPI()
+    return _api_instance
+
+
+def extract_terabox_data(url: str, video_quality: str = "HD Video") -> Dict:
+    """
+    Backward compatible wrapper for extract_data
+    Used by old code that imports: from terabox_api import extract_terabox_data
+    """
+    api = get_api_instance()
+    return api.extract_data(url, video_quality)
+
+
+def format_size(size) -> str:
+    """
+    Backward compatible wrapper for _format_size
+    Used by old code that imports: from terabox_api import format_size
+    """
+    api = get_api_instance()
+    return api._format_size(size)
+                
