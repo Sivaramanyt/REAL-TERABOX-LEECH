@@ -1,6 +1,7 @@
 """
 Terabox API - Fixed Response Format Parsing (November 2025)
 Handles: Udayscript (primary) + Wdzone (backup) API response formats
+Fixed: Wdzone LIST response with emoji keys
 """
 
 import requests
@@ -166,64 +167,69 @@ class TeraboxAPI:
             return None
     
     def _parse_wdzone(self, data: Dict) -> Optional[List[Dict]]:
-        """Parse Wdzone API response format - IMPROVED for actual response"""
+        """Parse Wdzone API response format - FIXED for LIST response with emoji keys"""
         try:
-            logger.info(f"🔍 Parsing Wdzone response: {data}")
+            logger.info(f"🔍 Parsing Wdzone response")
             
             files = []
-            
-            # Try multiple response formats
             file_data = None
             
-            # Format 1: Direct response with status and data
-            if 'success' in data or 'status' in data:
-                is_success = data.get('success') == True or data.get('status') in ['success', 'ok']
-                if not is_success:
-                    logger.warning(f"⚠️ Wdzone not successful: {data.get('status')}")
-                    return None
-                file_data = data.get('data') or data.get('result') or data
-            
-            # Format 2: Emoji keys (✅ Status, 📜 Extracted Info)
-            elif '✅ Status' in data or 'Status' in data:
+            # Handle emoji keys (✅ Status, 📜 Extracted Info)
+            if '✅ Status' in data or 'Status' in data:
                 status = data.get('✅ Status') or data.get('Status')
                 if status not in ['Success', 'success', 'ok']:
                     logger.warning(f"⚠️ Wdzone status: {status}")
                     return None
-                file_data = data.get('📜 Extracted Info') or data.get('Extracted Info') or data.get('data') or data
+                
+                # Get extracted info - CAN BE A LIST!
+                file_data = data.get('📜 Extracted Info') or data.get('Extracted Info') or data.get('data')
             
-            # Format 3: Direct file info
+            # Format 1: Direct response with status and data
+            elif 'success' in data or 'status' in data:
+                is_success = data.get('success') == True or data.get('status') in ['success', 'ok']
+                if not is_success:
+                    logger.warning(f"⚠️ Wdzone not successful")
+                    return None
+                file_data = data.get('data') or data.get('result') or data
+            
+            # Format 2: Direct file info
             else:
                 file_data = data
             
-            if not isinstance(file_data, dict):
-                logger.warning(f"⚠️ file_data is not dict: {type(file_data)}")
-                return None
-            
-            # Get file list
-            if 'files' in file_data:
-                file_list = file_data['files']
-                if not isinstance(file_list, list):
-                    file_list = [file_list]
-            elif any(key in file_data for key in ['file_name', 'name', 'filename', 'download_url', 'link']):
-                file_list = [file_data]
-            elif 'list' in file_data:
-                file_list = file_data['list']
-                if not isinstance(file_list, list):
-                    file_list = [file_list]
+            # IMPORTANT: file_data can be a LIST or DICT!
+            if isinstance(file_data, list):
+                # It's already a list of files
+                file_list = file_data
+                logger.info(f"📦 file_data is a list with {len(file_list)} items")
+            elif isinstance(file_data, dict):
+                # It's a dict, extract files from it
+                if 'files' in file_data:
+                    file_list = file_data['files']
+                    if not isinstance(file_list, list):
+                        file_list = [file_list]
+                elif any(key in file_data for key in ['file_name', 'name', 'filename', 'download_url', 'link', '📂 Title']):
+                    file_list = [file_data]
+                elif 'list' in file_data:
+                    file_list = file_data['list']
+                    if not isinstance(file_list, list):
+                        file_list = [file_list]
+                else:
+                    logger.warning(f"⚠️ Cannot find files in dict keys: {list(file_data.keys())}")
+                    return None
             else:
-                # Last resort: find file-like objects
-                file_list = []
-                for key, value in file_data.items():
-                    if isinstance(value, dict) and any(k in value for k in ['download_url', 'link', 'url']):
-                        file_list.append(value)
+                logger.warning(f"⚠️ file_data is neither list nor dict: {type(file_data)}")
+                return None
             
             # Parse each file
             for file_info in file_list:
                 if not isinstance(file_info, dict):
+                    logger.warning(f"⚠️ file_info not a dict: {type(file_info)}")
                     continue
                 
-                # Extract filename - try all possible keys
+                # Extract filename - try all possible keys INCLUDING EMOJI KEYS
                 filename = (
+                    file_info.get('📂 Title') or  # Wdzone emoji key
+                    file_info.get('Title') or
                     file_info.get('file_name') or
                     file_info.get('fileName') or
                     file_info.get('name') or
@@ -232,8 +238,10 @@ class TeraboxAPI:
                     'Terabox File'
                 )
                 
-                # Extract download URL - try all possible keys
+                # Extract download URL - try all possible keys INCLUDING EMOJI KEYS
                 download_url = (
+                    file_info.get('🔽 Direct Download Link') or  # Wdzone emoji key
+                    file_info.get('Direct Download Link') or
                     file_info.get('download_url') or
                     file_info.get('downloadUrl') or
                     file_info.get('direct_link') or
@@ -247,8 +255,10 @@ class TeraboxAPI:
                     logger.warning(f"⚠️ No download URL in: {list(file_info.keys())}")
                     continue
                 
-                # Extract size
+                # Extract size - INCLUDING EMOJI KEY
                 size_str = (
+                    file_info.get('📏 Size') or  # Wdzone emoji key
+                    file_info.get('Size') or
                     file_info.get('size') or
                     file_info.get('fileSize') or
                     file_info.get('file_size') or
@@ -267,7 +277,6 @@ class TeraboxAPI:
             
             if not files:
                 logger.warning("⚠️ No files extracted from Wdzone")
-                logger.info(f"🔍 Debug - Full response: {data}")
             
             return files if files else None
             
@@ -280,11 +289,14 @@ class TeraboxAPI:
         """Format file size to human readable"""
         try:
             if isinstance(size, str):
-                # Already formatted
+                # Already formatted (like "2.30 MB")
                 if any(unit in size.upper() for unit in ['KB', 'MB', 'GB', 'TB']):
                     return size
                 # Try to parse as number
-                size = float(size)
+                try:
+                    size = float(size)
+                except:
+                    return size  # Return as-is if can't parse
             
             size_bytes = float(size)
             
@@ -329,4 +341,4 @@ def format_size(size) -> str:
     """
     api = get_api_instance()
     return api._format_size(size)
-                
+                        
