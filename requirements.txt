@@ -9,3 +9,5 @@ terabox-downloader
 # Adult automation packages
 xvideos-py==0.2.0
 apscheduler==3.10.0
+xnxx-scraper
+beautifulsoup4
