@@ -6,7 +6,7 @@ No paid APIs - only free libraries
 
 import logging
 import random
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,35 @@ except ImportError:
 from adult_config import ILLEGAL_KEYWORDS, INDIAN_KEYWORDS, MIN_VIEWS
 
 
+def parse_views(raw: Any) -> int:
+    """
+    Convert views from library format to plain int.
+
+    Handles:
+    - int
+    - "12,345"
+    - "1.2M", "500K"
+    """
+    if isinstance(raw, int):
+        return raw
+    if raw is None:
+        return 0
+
+    s = str(raw).replace(",", "").strip().lower()
+    if not s:
+        return 0
+
+    try:
+        if s.endswith("m"):
+            return int(float(s[:-1]) * 1_000_000)
+        if s.endswith("k"):
+            return int(float(s[:-1]) * 1_000)
+        return int(float(s))
+    except Exception:
+        logger.debug(f"⚠️ Could not parse views '{raw}', defaulting to 0")
+        return 0
+
+
 def is_illegal_content(title: str, tags: List[str] = []) -> bool:
     """
     Check if content contains illegal keywords.
@@ -47,9 +76,18 @@ def is_indian_content(title: str, tags: List[str] = []) -> bool:
     """Check if content is Indian-related."""
     text = f"{title} {' '.join(tags)}".lower()
     indian_markers = [
-        "indian", "desi", "hindi", "tamil", "telugu",
-        "malayalam", "punjabi", "mumbai", "delhi",
-        "bangalore", "mms", "leaked",
+        "indian",
+        "desi",
+        "hindi",
+        "tamil",
+        "telugu",
+        "malayalam",
+        "punjabi",
+        "mumbai",
+        "delhi",
+        "bangalore",
+        "mms",
+        "leaked",
     ]
     return any(marker in text for marker in indian_markers)
 
@@ -68,23 +106,23 @@ async def scrape_xvideos(keyword: str, min_views: int = MIN_VIEWS) -> List[Dict]
         logger.info(f"🔍 Scraping xVideos for: {keyword}")
         xv = XVideos()
 
-        # IMPORTANT: use correct parameter names for xvideos-py
-        # Older code used query= which caused:
-        # XVideos.search() got an unexpected keyword argument 'query'
-        results = xv.search(k=keyword, sort="views")  # fixed call [web:260][file:253]
+        # Correct parameter names for xvideos-py
+        results = xv.search(k=keyword, sort="views")  # [web:260]
 
         videos: List[Dict] = []
         blocked = 0
 
-        # xvideos-py typically returns a dict with 'videos' key
         for video in results.get("videos", [])[:20]:
+            raw_views = video.get("views", 0)
+            views_int = parse_views(raw_views)
+
             # Safety check FIRST
             if is_illegal_content(video["title"], video.get("tags", [])):
                 blocked += 1
                 continue
 
-            # Views filter
-            if video.get("views", 0) < min_views:
+            # Views filter (now int vs int ➜ no '<' TypeError)
+            if views_int < min_views:
                 continue
 
             # Must be Indian content
@@ -96,14 +134,13 @@ async def scrape_xvideos(keyword: str, min_views: int = MIN_VIEWS) -> List[Dict]
                 try:
                     video_info = xv.details(video["url"])
                 except AttributeError:
-                    # Fallback if library exposes get_video()
                     video_info = xv.get_video(video["url"])
 
+                final_title = video_info.get("title", video["title"])
+                final_tags = video_info.get("tags", [])
+
                 # Final safety check
-                if is_illegal_content(
-                    video_info.get("title", video["title"]),
-                    video_info.get("tags", []),
-                ):
+                if is_illegal_content(final_title, final_tags):
                     blocked += 1
                     continue
 
@@ -113,7 +150,6 @@ async def scrape_xvideos(keyword: str, min_views: int = MIN_VIEWS) -> List[Dict]
                 if not download_url:
                     files = video_info.get("files", {}) or {}
                     if isinstance(files, dict) and files:
-                        # Prefer higher quality if available
                         download_url = (
                             files.get("high")
                             or files.get("hd")
@@ -122,24 +158,23 @@ async def scrape_xvideos(keyword: str, min_views: int = MIN_VIEWS) -> List[Dict]
                         )
 
                 if not download_url:
-                    # Skip entries without a direct file URL
                     logger.debug(
-                        f"⚠️ Skipped (no download URL): {video_info.get('title', '')[:60]}"
+                        f"⚠️ Skipped (no download URL): {final_title[:60]}"
                     )
                     continue
 
                 videos.append(
                     {
                         "source": "xVideos",
-                        "title": video_info.get("title", video["title"]),
+                        "title": final_title,
                         "url": video["url"],
                         "download_url": download_url,
                         "thumbnail": video_info.get(
                             "thumbnail", video_info.get("image", "")
                         ),
                         "duration": video_info.get("duration", "0:00"),
-                        "views": video.get("views", 0),
-                        "tags": video_info.get("tags", []),
+                        "views": views_int,
+                        "tags": final_tags,
                     }
                 )
             except Exception as e:
@@ -149,7 +184,7 @@ async def scrape_xvideos(keyword: str, min_views: int = MIN_VIEWS) -> List[Dict]
         logger.info(
             f"✅ xVideos: Found {len(videos)} safe videos, blocked {blocked}"
         )
-        return videos[:5]  # Return top 5
+        return videos[:5]
 
     except Exception as e:
         logger.error(f"❌ xVideos scraping error: {e}")
@@ -173,13 +208,16 @@ async def scrape_xnxx(keyword: str, min_views: int = MIN_VIEWS) -> List[Dict]:
         blocked = 0
 
         for video in results[:20]:
+            raw_views = video.get("views", 0)
+            views_int = parse_views(raw_views)
+
             # Safety check
             if is_illegal_content(video["title"], video.get("tags", [])):
                 blocked += 1
                 continue
 
             # Views filter
-            if video.get("views", 0) < min_views:
+            if views_int < min_views:
                 continue
 
             # Indian content check
@@ -188,24 +226,23 @@ async def scrape_xnxx(keyword: str, min_views: int = MIN_VIEWS) -> List[Dict]:
 
             try:
                 video_info = xnxx.get_video(video["url"])
+                final_title = video_info.get("title", video["title"])
+                final_tags = video_info.get("tags", [])
 
-                if is_illegal_content(
-                    video_info.get("title", video["title"]),
-                    video_info.get("tags", []),
-                ):
+                if is_illegal_content(final_title, final_tags):
                     blocked += 1
                     continue
 
                 videos.append(
                     {
                         "source": "XNXX",
-                        "title": video_info.get("title", video["title"]),
+                        "title": final_title,
                         "url": video["url"],
                         "download_url": video_info.get("download_url", ""),
                         "thumbnail": video_info.get("thumbnail", ""),
                         "duration": video_info.get("duration", "0:00"),
-                        "views": video.get("views", 0),
-                        "tags": video_info.get("tags", []),
+                        "views": views_int,
+                        "tags": final_tags,
                     }
                 )
             except Exception:
@@ -232,17 +269,15 @@ async def scrape_all_sites(keyword: str = None) -> List[Dict]:
 
     all_videos: List[Dict] = []
 
-    # Scrape xVideos
     if XVIDEOS_AVAILABLE:
         xv_videos = await scrape_xvideos(keyword)
         all_videos.extend(xv_videos)
 
-    # Scrape XNXX
     if XNXX_AVAILABLE:
         xnxx_videos = await scrape_xnxx(keyword)
         all_videos.extend(xnxx_videos)
 
-    # Sort by views (highest first)
+    # Sort by numeric views (we already store ints)
     all_videos.sort(key=lambda x: x.get("views", 0), reverse=True)
 
     logger.info(f"📊 Total videos found: {len(all_videos)}")
@@ -256,4 +291,4 @@ def format_views(views: int) -> str:
     if views >= 1_000:
         return f"{views / 1_000:.0f}K"
     return str(views)
-            
+                
