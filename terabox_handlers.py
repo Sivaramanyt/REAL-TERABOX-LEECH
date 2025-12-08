@@ -250,8 +250,8 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
                 filecode = upload_data.get("filecode")
 
             if filecode:
-                video_url = f"https://lulustream.com/e/{filecode}"
-                logger.info(f"✅ LuluStream upload successful: {video_url}")
+                video_url = f"https://luluvid.com/{filecode}"
+                logger.info(f"✅ LuluStream upload successful (direct): {video_url}")
                 return video_url
             else:
                 logger.error(f"❌ No filecode in upload response: {upload_data}")
