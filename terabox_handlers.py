@@ -138,6 +138,7 @@ async def resolve_canonical_terabox_url(message_text: str) -> Optional[str]:
 
 
 # 🆕 NEW: Upload local file to LuluStream
+# 🆕 NEW: Upload local file to LuluStream
 async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]:
     """
     Upload local video file to LuluStream using 2-step flow:
@@ -219,7 +220,24 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
             logger.error(f"Text: {upload_resp.text[:300]}")
             return None
 
-        # Example LuluStream response:
+        # ---- Short-video / error text handling ----
+        files_data = upload_data.get("files", {})
+
+        # Sometimes 'files' can be a list; normalize to dict
+        if isinstance(files_data, list) and files_data:
+            files_data = files_data[0]
+
+        status_str = ""
+        if isinstance(files_data, dict):
+            status_str = str(files_data.get("status", "")).lower()
+
+        # LuluStream returns things like "000video is too short"
+        if "video is too short" in status_str:
+            logger.warning("⚠️ LuluStream says: video is too short, skipping LuluStream link")
+            return None
+
+        # ===== Normal success path =====
+        # Example response:
         # {
         #   "msg": "OK",
         #   "status": 200,
@@ -249,6 +267,8 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
     except Exception as e:
         logger.error(f"❌ LuluStream upload exception: {e}", exc_info=True)
         return None
+            
+
 async def process_terabox_download(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
