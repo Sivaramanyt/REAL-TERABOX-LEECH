@@ -7,7 +7,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from adult_config import ADMIN_IDS, AUTOMATION_STATUS_MSG
+from adult_config import ADMIN_IDS, LULUSTREAM_API_KEY, ADULT_CHANNEL_ID
 from adult_automation import auto_scrape_and_post, get_automation_stats
 from adult_scrapers import scrape_all_sites
 
@@ -31,12 +31,29 @@ async def adult_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         stats = await get_automation_stats()
         
-        message = AUTOMATION_STATUS_MSG.format(**stats)
+        # Determine status indicators - FIXED
+        lulu_status = '✅ Connected' if LULUSTREAM_API_KEY else '❌ Not configured'
+        overall_status = '🟢 Running' if (LULUSTREAM_API_KEY and ADULT_CHANNEL_ID) else '🔴 Not configured'
+        
+        # Format message with all values
+        from adult_config import AUTOMATION_STATUS_MSG
+        
+        message = AUTOMATION_STATUS_MSG.format(
+            min_views=stats['min_views'],
+            posts_per_run=stats['posts_per_run'],
+            schedule=stats['schedule'],
+            channel_id=stats['channel_id'],
+            blocked_count=stats['blocked_count'],
+            lulu_status=lulu_status,
+            overall_status=overall_status,
+            total_posted=stats['total_posted'],
+            today_posted=stats['today_posted']
+        )
         
         await update.message.reply_text(message, parse_mode='Markdown')
         
     except Exception as e:
-        logger.error(f"Status error: {e}")
+        logger.error(f"Status error: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 
@@ -58,7 +75,7 @@ async def adult_manual_scrape(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("✅ Manual scrape complete! Check channel.")
         
     except Exception as e:
-        logger.error(f"Manual scrape error: {e}")
+        logger.error(f"Manual scrape error: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 
@@ -93,5 +110,6 @@ async def adult_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No videos found")
             
     except Exception as e:
-        logger.error(f"Search error: {e}")
+        logger.error(f"Search error: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Error: {str(e)}")
+        
