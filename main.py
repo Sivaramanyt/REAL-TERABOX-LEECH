@@ -129,5 +129,39 @@ def main():
         logger.error(f"❌ Fatal error: {e}")
         sys.exit(1)
 
+# ========== ADULT CONTENT AUTOMATION (NEW) ==========
+try:
+    from adult_handlers import adult_status, adult_manual_scrape, adult_search
+    from adult_automation import auto_scrape_and_post
+    from adult_config import LULUSTREAM_API_KEY, ADULT_CHANNEL_ID, SCRAPE_HOURS
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    
+    if LULUSTREAM_API_KEY and ADULT_CHANNEL_ID:
+        # Add admin commands
+        application.add_handler(CommandHandler("adultstatus", adult_status))
+        application.add_handler(CommandHandler("adultscrape", adult_manual_scrape))
+        application.add_handler(CommandHandler("adultsearch", adult_search))
+        
+        # Setup scheduler
+        scheduler = AsyncIOScheduler()
+        
+        # Schedule automatic scraping
+        for hour in SCRAPE_HOURS:
+            scheduler.add_job(
+                lambda: auto_scrape_and_post(application.bot),
+                'cron',
+                hour=hour,
+                minute=0
+            )
+        
+        scheduler.start()
+        logger.info("✅ Adult content automation enabled")
+    else:
+        logger.info("⚠️ Adult automation disabled (not configured)")
+        
+except ImportError as e:
+    logger.warning(f"⚠️ Adult automation not available: {e}")
+    
+
 if __name__ == '__main__':
     main()
