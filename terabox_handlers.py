@@ -123,46 +123,101 @@ async def resolve_canonical_terabox_url(message_text: str) -> Optional[str]:
 # 🆕 NEW: Upload local file to LuluStream
 async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]:
     """
-    Upload local video file to LuluStream
-    Returns embed link if successful
+    Upload local video file to LuluStream using 2-step flow:
+    1) GET upload server URL
+    2) POST file to that server
+    Returns final video URL if successful
     """
-    
     if not LULUSTREAM_API_KEY:
         logger.warning("⚠️ LuluStream API key not configured")
         return None
-    
+
     try:
         import requests
-        
-        logger.info(f"⬆️ Uploading to LuluStream: {title[:60]}...")
-        
-        # Upload file directly
-        with open(file_path, 'rb') as f:
-            files = {'file': (os.path.basename(file_path), f, 'video/mp4')}
-            headers = {'Authorization': f'Bearer {LULUSTREAM_API_KEY}'}
-            
-            response = requests.post(
-                'https://api.lulustream.com/upload',
-                files=files,
-                headers=headers,
-                data={'title': title},
-                timeout=1800  # 30 mins for large files
-            )
-        
-        if response.status_code == 200:
-            data = response.json()
-            embed_link = data.get('embed_url') or data.get('url') or data.get('watch_url')
-            logger.info(f"✅ LuluStream upload successful")
-            return embed_link
-        else:
-            logger.error(f"❌ LuluStream upload failed: {response.status_code} - {response.text}")
+
+        logger.info(f"⬆️ Step 1: Getting LuluStream upload server...")
+
+        # Step 1: Get upload server URL
+        server_resp = requests.get(
+            "https://lulustream.com/api/upload/server",
+            params={"key": LULUSTREAM_API_KEY},
+            timeout=30,
+        )
+
+        logger.info(f"📊 Server response status: {server_resp.status_code}")
+
+        if server_resp.status_code != 200:
+            logger.error(f"❌ Failed to get upload server: {server_resp.text[:300]}")
             return None
-            
+
+        try:
+            server_data = server_resp.json()
+        except Exception as e:
+            logger.error(f"❌ Failed to parse server JSON: {e}")
+            logger.error(f"Text: {server_resp.text[:300]}")
+            return None
+
+        if server_data.get("status") != 200 or server_data.get("msg") != "OK":
+            logger.error(f"❌ Server error: {server_data}")
+            return None
+
+        upload_url = server_data.get("result")
+        if not upload_url:
+            logger.error(f"❌ No 'result' upload URL in server response: {server_data}")
+            return None
+
+        logger.info(f"✅ Got upload URL: {upload_url}")
+
+        # Step 2: Upload file to that server
+        logger.info(f"⬆️ Step 2: Uploading file to LuluStream server...")
+
+        with open(file_path, "rb") as f:
+            files = {
+                "file": (os.path.basename(file_path), f, "video/mp4"),
+            }
+            data = {
+                "key": LULUSTREAM_API_KEY,
+                "file_title": title,
+                "file_descr": f"Uploaded from Terabox bot: {title}",
+            }
+
+            upload_resp = requests.post(
+                upload_url,
+                files=files,
+                data=data,
+                timeout=1800,
+            )
+
+        logger.info(f"📊 Upload response status: {upload_resp.status_code}")
+
+        if upload_resp.status_code != 200:
+            logger.error(f"❌ Upload HTTP error: {upload_resp.text[:300]}")
+            return None
+
+        try:
+            upload_data = upload_resp.json()
+        except Exception as e:
+            logger.error(f"❌ Failed to parse upload JSON: {e}")
+            logger.error(f"Text: {upload_resp.text[:300]}")
+            return None
+
+        # Most LuluStream scripts return final URL in 'result'
+        if upload_data.get("status") == 200 and upload_data.get("msg") == "OK":
+            video_url = upload_data.get("result")
+            if video_url:
+                logger.info(f"✅ LuluStream upload successful: {video_url}")
+                return video_url
+            else:
+                logger.error(f"❌ No 'result' URL in upload response: {upload_data}")
+                return None
+        else:
+            logger.error(f"❌ Upload failed: {upload_data}")
+            return None
+
     except Exception as e:
-        logger.error(f"❌ LuluStream upload error: {e}")
+        logger.error(f"❌ LuluStream upload exception: {e}", exc_info=True)
         return None
-
-
+    
 async def process_terabox_download(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
