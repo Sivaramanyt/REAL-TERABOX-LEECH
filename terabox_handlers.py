@@ -481,8 +481,7 @@ async def process_terabox_download(
                 update, context, file_path, caption
             )
             cleanup_file(file_path)
-
-                # 7) Post to adult channel with LuluStream link (no thumbnail to avoid errors)
+        # 7) Post to adult channel with LuluStream link (no thumbnail to avoid errors)
         if ADULT_CHANNEL_ID and sent_message:
             try:
                 logger.info("User %s Preparing adult channel post...", user_id)
@@ -499,8 +498,8 @@ async def process_terabox_download(
                     )
                 else:
                     bot_link = (
-                        f\"https://t.me/{BOT_USERNAME}"
-                        f\"?start=file_{sent_message.message_id}\"
+                        f"https://t.me/{BOT_USERNAME}"
+                        f"?start=file_{sent_message.message_id}"
                     )
                     post_caption = (
                         f"🔥 {filename}\n"
@@ -525,8 +524,8 @@ async def process_terabox_download(
                     user_id,
                     e,
                     exc_info=True,
-                    )
-
+                )
+                
         # 8) Delete status message
         try:
             await status_msg.delete()
