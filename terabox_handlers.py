@@ -126,7 +126,7 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
     Upload local video file to LuluStream using 2-step flow:
     1) GET upload server URL
     2) POST file to that server
-    Returns final video URL if successful
+    Returns final video URL (constructed from filecode)
     """
     if not LULUSTREAM_API_KEY:
         logger.warning("⚠️ LuluStream API key not configured")
@@ -154,7 +154,6 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
             server_data = server_resp.json()
         except Exception as e:
             logger.error(f"❌ Failed to parse server JSON: {e}")
-            logger.error(f"Text: {server_resp.text[:300]}")
             return None
 
         if server_data.get("status") != 200 or server_data.get("msg") != "OK":
@@ -163,13 +162,13 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
 
         upload_url = server_data.get("result")
         if not upload_url:
-            logger.error(f"❌ No 'result' upload URL in server response: {server_data}")
+            logger.error(f"❌ No 'result' upload URL: {server_data}")
             return None
 
         logger.info(f"✅ Got upload URL: {upload_url}")
 
-        # Step 2: Upload file to that server
-        logger.info(f"⬆️ Step 2: Uploading file to LuluStream server...")
+        # Step 2: Upload file
+        logger.info(f"⬆️ Step 2: Uploading file to LuluStream...")
 
         with open(file_path, "rb") as f:
             files = {
@@ -178,7 +177,7 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
             data = {
                 "key": LULUSTREAM_API_KEY,
                 "file_title": title,
-                "file_descr": f"Uploaded from Terabox bot: {title}",
+                "file_descr": f"Uploaded from Terabox: {title}",
             }
 
             upload_resp = requests.post(
@@ -196,19 +195,32 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
 
         try:
             upload_data = upload_resp.json()
+            logger.info(f"📊 Upload response data: {upload_data}")
         except Exception as e:
             logger.error(f"❌ Failed to parse upload JSON: {e}")
-            logger.error(f"Text: {upload_resp.text[:300]}")
             return None
 
-        # Most LuluStream scripts return final URL in 'result'
+        # Check response and extract filecode
         if upload_data.get("status") == 200 and upload_data.get("msg") == "OK":
-            video_url = upload_data.get("result")
-            if video_url:
+            # Check for filecode in 'files' dict
+            files_data = upload_data.get("files", {})
+            
+            if isinstance(files_data, dict):
+                filecode = files_data.get("filecode")
+            else:
+                filecode = None
+            
+            # Alternative: check direct 'filecode' field
+            if not filecode:
+                filecode = upload_data.get("filecode")
+            
+            if filecode:
+                # Construct LuluStream video URL
+                video_url = f"https://lulustream.com/e/{filecode}"
                 logger.info(f"✅ LuluStream upload successful: {video_url}")
                 return video_url
             else:
-                logger.error(f"❌ No 'result' URL in upload response: {upload_data}")
+                logger.error(f"❌ No filecode in response: {upload_data}")
                 return None
         else:
             logger.error(f"❌ Upload failed: {upload_data}")
@@ -217,6 +229,8 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
     except Exception as e:
         logger.error(f"❌ LuluStream upload exception: {e}", exc_info=True)
         return None
+        
+
     
 async def process_terabox_download(
     update: Update,
@@ -411,41 +425,41 @@ async def process_terabox_download(
             sent_message = await upload_to_telegram(update, context, file_path, caption)
             cleanup_file(file_path)
         
-        # 🆕 NEW: Auto-forward to backup channel (storage)
-        if AUTO_FORWARD_ENABLED and sent_message:
-            try:
-                await forward_file_to_channel(context, user, sent_message)
-                logger.info(f"✅ [User {user_id}] File forwarded to backup channel")
-            except Exception as e:
-                logger.error(f"⚠️ [User {user_id}] Forward failed: {e}")
         
-        # 🆕 NEW: Post to adult channel with LuluStream link
-        if ADULT_CHANNEL_ID and sent_message:
-            try:
-                # Get thumbnail from sent message
-                thumbnail_file_id = None
-                if sent_message.video:
-                    thumbnail_file_id = sent_message.video.thumbnail.file_id if sent_message.video.thumbnail else None
-                elif sent_message.document:
-                    thumbnail_file_id = sent_message.document.thumbnail.file_id if sent_message.document.thumbnail else None
-                
-                # Create caption with LuluStream link or bot link
-                if lulustream_link:
-                    # Use LuluStream link
-                    post_caption = f"""
+    # 🆕 NEW: Post to adult channel with LuluStream link
+    if ADULT_CHANNEL_ID and sent_message:
+        try:
+            logger.info(f"📢 [User {user_id}] Preparing adult channel post...")
+
+            # Get thumbnail as bytes (Telegram doesn't accept 'thumbnail' file_id directly)
+            thumbnail_to_send = None
+
+            if sent_message.video and sent_message.video.thumbnail:
+                try:
+                    logger.info("📸 Downloading video thumbnail...")
+                    thumb_file = await context.bot.get_file(sent_message.video.thumbnail.file_id)
+                    thumbnail_to_send = await thumb_file.download_as_bytearray()
+                    logger.info("✅ Thumbnail downloaded")
+                except Exception as e:
+                    logger.warning(f"⚠️ Thumbnail download failed: {e}")
+
+            # Build caption
+            if lulustream_link:
+                post_caption = f"""
 🔥 **{filename}**
 
 📊 Size: {size_readable}
 
 ▶️ **Watch Online:** {lulustream_link}
 
-💡 Click link to stream
+💡 Click to stream video
 🇮🇳 #Indian #Terabox #Adult
+
+Via @{BOT_USERNAME}
 """
-                else:
-                    # Fallback to bot deep link
-                    bot_link = f"https://t.me/{BOT_USERNAME}?start=file_{sent_message.message_id}"
-                    post_caption = f"""
+            else:
+                bot_link = f"https://t.me/{BOT_USERNAME}?start=file_{sent_message.message_id}"
+                post_caption = f"""
 🔥 **{filename}**
 
 📊 Size: {size_readable}
@@ -454,28 +468,31 @@ async def process_terabox_download(
 
 💡 Click to watch via bot
 🇮🇳 #Indian #Terabox
+
+Via @{BOT_USERNAME}
 """
-                
-                # Post to adult channel
-                if thumbnail_file_id:
-                    await context.bot.send_photo(
-                        chat_id=ADULT_CHANNEL_ID,
-                        photo=thumbnail_file_id,
-                        caption=post_caption,
-                        parse_mode='Markdown'
-                    )
-                else:
-                    await context.bot.send_message(
-                        chat_id=ADULT_CHANNEL_ID,
-                        text=post_caption,
-                        parse_mode='Markdown'
-                    )
-                
-                logger.info(f"✅ [User {user_id}] Posted to adult channel")
-                
-            except Exception as e:
-                logger.error(f"⚠️ [User {user_id}] Adult channel post failed: {e}")
-        
+
+            # Send to adult channel
+            if thumbnail_to_send:
+                logger.info("📤 Sending adult post with thumbnail...")
+                await context.bot.send_photo(
+                    chat_id=ADULT_CHANNEL_ID,
+                    photo=thumbnail_to_send,
+                    caption=post_caption,
+                    parse_mode='Markdown'
+                )
+            else:
+                logger.info("📤 Sending adult post without thumbnail...")
+                await context.bot.send_message(
+                    chat_id=ADULT_CHANNEL_ID,
+                    text=post_caption,
+                    parse_mode='Markdown'
+                )
+
+            logger.info(f"✅ [User {user_id}] Posted to adult channel")
+
+        except Exception as e:
+            logger.error(f"⚠️ [User {user_id}] Adult channel post error: {e}", exc_info=True)        
         # Delete status message
         try:
             await status_msg.delete()
