@@ -538,7 +538,7 @@ Via @{BOT_USERNAME}
                     logger.info("📤 Sending adult post with thumbnail...")
                     await context.bot.send_photo(
                         chat_id=ADULT_CHANNEL_ID,
-                        photo=thumb_file_id
+                        photo=thumb_file_id,
                         caption=post_caption,
                         
                     )
