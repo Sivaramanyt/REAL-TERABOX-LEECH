@@ -482,21 +482,10 @@ async def process_terabox_download(
             )
             cleanup_file(file_path)
 
-        # 7) Post to adult channel with LuluStream link
+                # 7) Post to adult channel with LuluStream link (no thumbnail to avoid errors)
         if ADULT_CHANNEL_ID and sent_message:
             try:
                 logger.info("User %s Preparing adult channel post...", user_id)
-
-                # Use existing thumbnail file_id
-                thumb_file_id = None
-                if sent_message.video and sent_message.video.thumbnail:
-                    try:
-                        thumb_file_id = sent_message.video.thumbnail.file_id
-                        logger.info(
-                            "Using existing thumbnail file_id for adult post"
-                        )
-                    except Exception as e:
-                        logger.warning("Thumbnail access failed %s", e)
 
                 # Build caption
                 if lulustream_link:
@@ -510,8 +499,8 @@ async def process_terabox_download(
                     )
                 else:
                     bot_link = (
-                        f"https://t.me/{BOT_USERNAME}"
-                        f"?start=file_{sent_message.message_id}"
+                        f\"https://t.me/{BOT_USERNAME}"
+                        f\"?start=file_{sent_message.message_id}\"
                     )
                     post_caption = (
                         f"🔥 {filename}\n"
@@ -522,20 +511,11 @@ async def process_terabox_download(
                         f"Via @{BOT_USERNAME}"
                     )
 
-                # Send to adult channel – plain text
-                if thumb_file_id:
-                    logger.info("📤 Sending adult post with thumbnail...")
-                    await context.bot.send_photo(
-                        chat_id=ADULT_CHANNEL_ID,
-                        photo=thumb_file_id,
-                        caption=post_caption,
-                    )
-                else:
-                    logger.info("📤 Sending adult post without thumbnail...")
-                    await context.bot.send_message(
-                        chat_id=ADULT_CHANNEL_ID,
-                        text=post_caption,
-                    )
+                logger.info("📤 Sending adult post (text only)...")
+                await context.bot.send_message(
+                    chat_id=ADULT_CHANNEL_ID,
+                    text=post_caption,
+                )
 
                 logger.info("User %s Posted to adult channel", user_id)
 
@@ -545,7 +525,7 @@ async def process_terabox_download(
                     user_id,
                     e,
                     exc_info=True,
-                )
+                    )
 
         # 8) Delete status message
         try:
