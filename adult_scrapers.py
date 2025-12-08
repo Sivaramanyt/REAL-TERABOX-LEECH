@@ -1,5 +1,5 @@
 """
-FREE scraper for Indian adult videos using xHamster category feed.
+FREE scraper for Indian/Tamil adult videos using xHamster mirror.
 
 No paid APIs - only free libraries.
 """
@@ -65,22 +65,26 @@ def is_illegal_content(title: str, tags: List[str] = []) -> bool:
     return False
 
 
-# -------------------- xHamster Indian category scraper --------------------
+# -------------------- xHamster mirror scraper --------------------
 
 
-async def scrape_xhamster() -> List[Dict]:
+async def scrape_xhamster(keyword: str = "tamil sex") -> List[Dict]:
     """
-    Scrape xHamster Indian category page.
+    Scrape xHamster mirror search page.
 
-    Uses: https://xhamster.com/categories/indian/best
-    No keyword, no view-based filtering; only blocks illegal keywords.
+    Uses: https://xhamster19.com/search/<keyword>
+    Default keyword = "tamil sex".
+    No view-based filtering; only blocks illegal keywords.
     """
     if not XHAMSTER_AVAILABLE:
         logger.warning("⚠️ xHamster scraper disabled")
         return []
 
-    # Stable Indian category feed. [web:291][web:292]
-    url = "https://xhamster.com/categories/indian/best"
+    # Use mirror that works without Google redirect / cookies. [web:290]
+    base = "https://xhamster19.com"
+
+    search_query = keyword.replace(" ", "+")
+    url = f"{base}/search/{search_query}"
 
     headers = {
         "User-Agent": (
@@ -93,7 +97,7 @@ async def scrape_xhamster() -> List[Dict]:
     blocked = 0
 
     try:
-        logger.info("🔍 Scraping xHamster Indian category feed")
+        logger.info(f"🔍 Scraping xHamster mirror for: {keyword} ({url})")
         timeout = aiohttp.ClientTimeout(total=20)
 
         async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
@@ -107,7 +111,6 @@ async def scrape_xhamster() -> List[Dict]:
         soup = BeautifulSoup(html, "html.parser")
 
         # Best-effort selectors for video cards; layout can change.
-        # Try multiple patterns to reduce "no cards found" issues.
         cards = []
 
         cards.extend(soup.select("a.video-thumb"))
@@ -128,7 +131,7 @@ async def scrape_xhamster() -> List[Dict]:
         unique_cards = unique_cards[:30]
 
         if not unique_cards:
-            logger.warning("⚠️ xHamster: no cards found on Indian category page")
+            logger.warning("⚠️ xHamster: no cards found on search page")
             return []
 
         for card in unique_cards:
@@ -142,7 +145,7 @@ async def scrape_xhamster() -> List[Dict]:
 
                 href = card.get("href") or ""
                 if not href.startswith("http"):
-                    href = "https://xhamster.com" + href
+                    href = base + href
 
                 thumb = (
                     card.get("data-src")
@@ -203,18 +206,20 @@ async def scrape_xhamster() -> List[Dict]:
 # -------------------- Multi-site wrapper --------------------
 
 
-async def scrape_all_sites(keyword: str = None) -> List[Dict]:
+async def scrape_all_sites(keyword: str = "tamil sex") -> List[Dict]:
     """
     Scrape all available sites and return combined results.
 
-    Currently only xHamster Indian category is used.
-    Keyword is ignored (kept only for backward compatibility with callers).
+    Currently only xHamster mirror is used.
+    Keyword defaults to "tamil sex" but can be overridden by caller.
     """
-    logger.info("🔎 Multi-site scrape (xHamster Indian category only)")
+    logger.info(
+        f"🔎 Multi-site scrape via xHamster mirror with keyword: {keyword}"
+    )
     all_videos: List[Dict] = []
 
     if XHAMSTER_AVAILABLE:
-        xh_videos = await scrape_xhamster()
+        xh_videos = await scrape_xhamster(keyword)
         all_videos.extend(xh_videos)
 
     logger.info(f"📊 Total videos found: {len(all_videos)}")
@@ -231,4 +236,4 @@ def format_views(views: int) -> str:
     if views >= 1_000:
         return f"{views / 1_000:.0f}K"
     return str(views)
-                  
+    
