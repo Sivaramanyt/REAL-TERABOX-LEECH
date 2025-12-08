@@ -61,7 +61,7 @@ ILLEGAL_KEYWORDS = [
     'rape', 'forced', 'abuse', 'torture', 'drugged', 'unconscious'
 ]
 
-# Messages
+# Messages - FIXED VERSION
 AUTOMATION_STATUS_MSG = """
 🤖 **Adult Content Automation Status**
 
@@ -77,10 +77,14 @@ AUTOMATION_STATUS_MSG = """
 • Quality filter: Allows all (HD/SD/recorded)
 
 ⚙️ **LuluStream:**
-• API: {'✅ Connected' if LULUSTREAM_API_KEY else '❌ Not configured'}
+• API: {lulu_status}
 • Monetization: Active
 
-🔄 **Status:** {'🟢 Running' if LULUSTREAM_API_KEY and ADULT_CHANNEL_ID else '🔴 Not configured'}
+🔄 **Status:** {overall_status}
+
+📈 **Statistics:**
+• Total Posted: {total_posted}
+• Today: {today_posted}
 """
 
 # Validation
