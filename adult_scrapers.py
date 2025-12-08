@@ -7,6 +7,10 @@ No paid APIs - only free libraries
 import logging
 import random
 from typing import List, Dict, Optional, Any
+import aiohttp
+from bs4 import BeautifulSoup
+
+XHAMSTER_AVAILABLE = True  # simple HTML scraper, no extra package
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +261,129 @@ async def scrape_xnxx(keyword: str, min_views: int = MIN_VIEWS) -> List[Dict]:
         logger.error(f"❌ XNXX scraping error: {e}")
         return []
 
+async def scrape_xhamster(keyword: str, min_views: int = MIN_VIEWS) -> List[Dict]:
+    """
+    Scrape xHamster search results (HTML) for Indian content.
 
+    This uses a simple HTML scraper, no official API.
+    It looks at the public search page and extracts:
+    - title
+    - URL
+    - thumbnail
+    - duration
+    - rough view count
+    """
+    if not XHAMSTER_AVAILABLE:
+        logger.warning("⚠️ xHamster scraper disabled")
+        return []
+
+    search_query = keyword.replace(" ", "+")
+    url = f"https://xhamster.desi/search/{search_query}"  # .desi mirror tends to be lighter
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        )
+    }
+
+    videos: List[Dict] = []
+    blocked = 0
+
+    try:
+        logger.info(f"🔍 Scraping xHamster for: {keyword}")
+        timeout = aiohttp.ClientTimeout(total=20)
+
+        async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    logger.error(f"❌ xHamster HTTP error: {resp.status}")
+                    return []
+
+                html = await resp.text()
+
+        soup = BeautifulSoup(html, "html.parser")
+
+        # xHamster layout can change; this targets generic video cards
+        cards = soup.select("a.video-thumb, a.thumb-image, div.video-item a")[:30]
+        if not cards:
+            logger.warning("⚠️ xHamster: no cards found on page")
+            return []
+
+        for card in cards:
+            try:
+                title = (card.get("title") or card.get("aria-label") or "").strip()
+                if not title:
+                    # Try child element
+                    title_el = card.select_one(".video-title, .thumb-title")
+                    title = title_el.get_text(strip=True) if title_el else ""
+                if not title:
+                    continue
+
+                href = card.get("href") or ""
+                if not href.startswith("http"):
+                    href = "https://xhamster.desi" + href
+
+                # Thumbnail
+                thumb = (
+                    card.get("data-src")
+                    or card.get("data-thumb")
+                    or card.get("src")
+                    or ""
+                )
+
+                # Duration and views – very heuristic
+                duration = "0:00"
+                duration_el = card.select_one(
+                    ".video-thumb__duration, .thumb-duration, .time"
+                )
+                if duration_el:
+                    duration = duration_el.get_text(strip=True)
+
+                views_int = 0
+                views_el = card.select_one(
+                    ".video-thumb__views, .thumb-views, .views"
+                )
+                if views_el:
+                    views_int = parse_views(views_el.get_text(strip=True))
+
+                # Safety + filters
+                if is_illegal_content(title, []):
+                    blocked += 1
+                    continue
+                if views_int < min_views:
+                    continue
+                if not is_indian_content(title, []):
+                    continue
+
+                videos.append(
+                    {
+                        "source": "xHamster",
+                        "title": title,
+                        "url": href,
+                        # For LuluStream remote upload we just need a playable URL.
+                        # xHamster pages contain the video; LuluStream will handle it.
+                        "download_url": href,
+                        "thumbnail": thumb,
+                        "duration": duration,
+                        "views": views_int,
+                        "tags": [],
+                    }
+                )
+
+            except Exception as e:
+                logger.debug(f"⚠️ xHamster: skipped card due to error: {e}")
+                continue
+
+        logger.info(
+            f"✅ xHamster: Found {len(videos)} safe videos, blocked {blocked}"
+        )
+        return videos[:5]
+
+    except Exception as e:
+        logger.error(f"❌ xHamster scraping error: {e}")
+        return []
+            
 async def scrape_all_sites(keyword: str = None) -> List[Dict]:
     """
     Scrape all available sites and return combined results.
