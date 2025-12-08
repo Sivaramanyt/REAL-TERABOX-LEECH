@@ -138,13 +138,12 @@ async def resolve_canonical_terabox_url(message_text: str) -> Optional[str]:
 
 
 # 🆕 NEW: Upload local file to LuluStream
-# 🆕 NEW: Upload local file to LuluStream
 async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]:
     """
     Upload local video file to LuluStream using 2-step flow:
     1) GET upload server URL
     2) POST file to that server
-    Returns final video URL (constructed from filecode)
+    Returns final video URL (constructed from filecode, direct luluvid link)
     """
     if not LULUSTREAM_API_KEY:
         logger.warning("⚠️ LuluStream API key not configured")
@@ -172,7 +171,6 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
             server_data = server_resp.json()
         except Exception as e:
             logger.error(f"❌ Failed to parse server JSON: {e}")
-            logger.error(f"Text: {server_resp.text[:300]}")
             return None
 
         if server_data.get("status") != 200 or server_data.get("msg") != "OK":
@@ -181,7 +179,7 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
 
         upload_url = server_data.get("result")
         if not upload_url:
-            logger.error(f"❌ No 'result' upload URL in server response: {server_data}")
+            logger.error(f"❌ No 'result' upload URL: {server_data}")
             return None
 
         logger.info(f"✅ Got upload URL: {upload_url}")
@@ -217,13 +215,12 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
             logger.info(f"📊 Upload response data: {upload_data}")
         except Exception as e:
             logger.error(f"❌ Failed to parse upload JSON: {e}")
-            logger.error(f"Text: {upload_resp.text[:300]}")
             return None
 
-        # ---- Normalize 'files' and handle short-video cases ----
+        # Normalize 'files' and check status text
         files_data = upload_data.get("files", {})
 
-        # 'files' may be a list or dict – normalize to dict
+        # Sometimes 'files' can be a list; normalize to dict
         if isinstance(files_data, list) and files_data:
             files_data = files_data[0]
 
@@ -231,14 +228,12 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
         if isinstance(files_data, dict):
             status_str = str(files_data.get("status", "")).lower()
 
+        # Skip very short videos
         if "video is too short" in status_str:
             logger.warning("⚠️ LuluStream says: video is too short, skipping LuluStream link")
             return None
 
-        # ===== Normal success path =====
-        # Example:
-        # "msg": "OK", "status": 200,
-        # "files": { "filecode": "3cz0i36mtnhr", "filename": "...", "status": "OK" }
+        # Normal success path
         if upload_data.get("status") == 200 and upload_data.get("msg") == "OK":
             filecode = None
 
@@ -246,10 +241,11 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
                 filecode = files_data.get("filecode") or None
 
             if not filecode:
-                # Fallback if API also returns flat `filecode`
+                # Fallback if API also returns flat 'filecode'
                 filecode = upload_data.get("filecode")
 
             if filecode:
+                # ✅ Direct Lulu link
                 video_url = f"https://luluvid.com/{filecode}"
                 logger.info(f"✅ LuluStream upload successful (direct): {video_url}")
                 return video_url
@@ -263,11 +259,7 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
     except Exception as e:
         logger.error(f"❌ LuluStream upload exception: {e}", exc_info=True)
         return None
-            
-
         
-            
-
 async def process_terabox_download(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -494,7 +486,7 @@ async def process_terabox_download(
         # 🆕 NEW: Post to adult channel with LuluStream link
         if ADULT_CHANNEL_ID and sent_message:
             try:
-                logger.info(f"📢 [User {user_id}] Preparing adult channel post...")
+                logger.info("User %s Preparing adult channel post...", user_id)
 
                 # Get thumbnail as bytes (Telegram doesn't accept 'thumbnail' file_id directly)
                 thumbnail_to_send = None
@@ -542,11 +534,11 @@ Via @{BOT_USERNAME}
 """
 
                 # Send to adult channel
-                if thumbnail_to_send:
+                if thumb_file_id:
                     logger.info("📤 Sending adult post with thumbnail...")
                     await context.bot.send_photo(
                         chat_id=ADULT_CHANNEL_ID,
-                        photo=thumbnail_to_send,
+                        photo=thumb_file_id
                         caption=post_caption,
                         
                     )
@@ -558,7 +550,7 @@ Via @{BOT_USERNAME}
                         
                     )
 
-                logger.info(f"✅ [User {user_id}] Posted to adult channel")
+                logger.info("User %s Posted to adult channel", user_id)
 
             except Exception as e:
                 logger.error(
