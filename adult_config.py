@@ -31,17 +31,11 @@ SCRAPE_HOURS = os.getenv("SCRAPE_HOURS", "6,12,18,0").split(",")  # 4 times dail
 INDIAN_KEYWORDS = [
     "indian mms",
     "desi leaked",
-    "indian bhabhi",
-    "desi couple homemade",
-    "indian girlfriend",
-    "desi wife secret",
-    "mumbai scandal",
-    "delhi mms",
-    "bangalore couple",
+    "indian",
+    "india",
+    "desi",
     "tamil sex video",
-    "telugu aunty",
-    "malayalam couple",
-    "punjabi girl"
+    "desi sex video",
 ]
 
 # =====================================================
