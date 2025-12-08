@@ -272,9 +272,10 @@ async def process_terabox_download(
     await LEECH_SEMAPHORE.acquire()
     user = update.effective_user
     file_path = None
-    lulustream_link = None
+    lulustream_link: Optional[str] = None
 
     try:
+        # 1) Extract info
         logger.info(f"📋 [User {user_id}] Extracting file info from: {terabox_url}")
         await status_msg.edit_text(
             "📋 **Fetching file information...**\n\nUse /cancel to stop.",
@@ -284,7 +285,7 @@ async def process_terabox_download(
         # Try API extraction first
         result = extract_terabox_data(terabox_url)
 
-        # 🆕 NEW: If API fails, try direct method
+        # If API fails, try direct method
         if not result or "files" not in result or not result["files"]:
             logger.warning(
                 f"⚠️ [User {user_id}] API extraction failed, trying direct method..."
@@ -298,7 +299,6 @@ async def process_terabox_download(
 
                 # Use direct leech method
                 success = await leech_terabox_direct(update, context, terabox_url)
-
                 if success:
                     # Increment attempts for direct method too
                     increment_leech_attempts(user_id)
@@ -321,13 +321,8 @@ async def process_terabox_download(
                         verify_link = generate_monetized_verification_link(
                             context.bot.username, token
                         )
-
                         keyboard = [
-                            [
-                                InlineKeyboardButton(
-                                    "✅ VERIFY FOR LEECH", url=verify_link
-                                )
-                            ],
+                            [InlineKeyboardButton("✅ VERIFY FOR LEECH", url=verify_link)],
                             [
                                 InlineKeyboardButton(
                                     "📺 HOW TO VERIFY?",
@@ -340,14 +335,12 @@ async def process_terabox_download(
                                 )
                             ],
                         ]
-
                         await update.message.reply_text(
                             "🎬 **Leech Verification Required**\n\n"
                             f"You've used **{used_attempts}\\{FREE_LEECH_LIMIT} free leeches!**",
                             reply_markup=InlineKeyboardMarkup(keyboard),
                             parse_mode="Markdown",
                         )
-
                     return  # Success via direct method
 
             # Both methods failed
@@ -355,7 +348,7 @@ async def process_terabox_download(
                 "No files found in Terabox link (API and direct method failed)"
             )
 
-        # API succeeded, continue with normal flow
+        # 2) API succeeded, continue with normal flow
         file_info = result["files"][0]
         filename = file_info.get("name", "Unknown")
         size_readable = file_info.get("size", "Unknown")
@@ -369,7 +362,12 @@ async def process_terabox_download(
                 if s.endswith("MB"):
                     file_size = int(float(s.replace("MB", "").strip()) * 1024 * 1024)
                 elif s.endswith("GB"):
-                    file_size = int(float(s.replace("GB", "").strip()) * 1024 * 1024 * 1024)
+                    file_size = int(
+                        float(s.replace("GB", "").strip())
+                        * 1024
+                        * 1024
+                        * 1024
+                    )
                 elif s.endswith("KB"):
                     file_size = int(float(s.replace("KB", "").strip()) * 1024)
         except Exception:
@@ -387,8 +385,8 @@ async def process_terabox_download(
             )
             return
 
-        # Check file size limit
-        max_size = 2 * 1024 * 1024 * 1024  # 2GB
+        # Check file size limit (2GB)
+        max_size = 2 * 1024 * 1024 * 1024
         if file_size and file_size > max_size:
             await status_msg.edit_text(
                 f"❌ **File too large!**\n\n📊 **Size:** {size_readable}\n📊 **Max:** 2GB",
@@ -396,7 +394,7 @@ async def process_terabox_download(
             )
             return
 
-        # Show file info
+        # 3) Show file info
         await status_msg.edit_text(
             f"📁 **File Found!**\n\n"
             f"📝 `{filename}`\n"
@@ -407,7 +405,8 @@ async def process_terabox_download(
                 [
                     [
                         InlineKeyboardButton(
-                            "🛑 Cancel Leech", callback_data=f"cancel_leech:{user_id}"
+                            "🛑 Cancel Leech",
+                            callback_data=f"cancel_leech:{user_id}",
                         )
                     ]
                 ]
@@ -415,7 +414,7 @@ async def process_terabox_download(
             parse_mode="Markdown",
         )
 
-        # Download file
+        # 4) Download file
         SPLIT_THRESHOLD_BYTES = 300 * 1024 * 1024  # 300MB
         split_enabled = bool(file_size and file_size >= SPLIT_THRESHOLD_BYTES)
         SPLIT_PART_MB_DEFAULT = 200
@@ -430,23 +429,24 @@ async def process_terabox_download(
             split_part_mb=SPLIT_PART_MB_DEFAULT,
         )
 
-        # 🆕 NEW: Upload to LuluStream (for single files only, not split)
+        # 5) Upload to LuluStream (single file only)
         if LULUSTREAM_AVAILABLE and not isinstance(file_result, list):
             await status_msg.edit_text(
                 "⬆️ **Uploading to LuluStream...**\n\nThis may take a few minutes.",
                 parse_mode="Markdown",
             )
-
             try:
                 lulustream_link = await upload_file_to_lulustream(file_result, filename)
                 if lulustream_link:
                     logger.info(f"✅ [User {user_id}] LuluStream upload successful")
                 else:
-                    logger.warning(f"⚠️ [User {user_id}] LuluStream upload failed")
+                    logger.warning(
+                        f"⚠️ [User {user_id}] LuluStream upload failed or skipped"
+                    )
             except Exception as e:
                 logger.error(f"❌ [User {user_id}] LuluStream error: {e}")
 
-        # Upload to Telegram
+        # 6) Upload to Telegram
         if isinstance(file_result, list):
             # Split upload
             total_parts = len(file_result)
@@ -457,20 +457,17 @@ async def process_terabox_download(
 
             part_no = 1
             last_sent = None
-
             for part_path in file_result:
                 part_caption = (
                     f"📄 **{filename}**\n"
                     f"🧩 Part {part_no}/{total_parts}\n"
                     f"🤖 @{context.bot.username}"
                 )
-
                 last_sent = await upload_to_telegram(
                     update, context, part_path, part_caption
                 )
                 cleanup_file(part_path)
                 part_no += 1
-
             sent_message = last_sent
         else:
             # Single file upload
@@ -480,90 +477,83 @@ async def process_terabox_download(
                 f"📊 {size_readable}\n"
                 f"🤖 @{context.bot.username}"
             )
-            sent_message = await upload_to_telegram(update, context, file_path, caption)
+            sent_message = await upload_to_telegram(
+                update, context, file_path, caption
+            )
             cleanup_file(file_path)
 
-        # 🆕 NEW: Post to adult channel with LuluStream link
+        # 7) Post to adult channel with LuluStream link
         if ADULT_CHANNEL_ID and sent_message:
             try:
                 logger.info("User %s Preparing adult channel post...", user_id)
 
-                # Get thumbnail as bytes (Telegram doesn't accept 'thumbnail' file_id directly)
-                thumbnail_to_send = None
-
+                # Use existing thumbnail file_id
+                thumb_file_id = None
                 if sent_message.video and sent_message.video.thumbnail:
                     try:
-                        logger.info("📸 Downloading video thumbnail...")
-                        thumb_file = await context.bot.get_file(
-                            sent_message.video.thumbnail.file_id
+                        thumb_file_id = sent_message.video.thumbnail.file_id
+                        logger.info(
+                            "Using existing thumbnail file_id for adult post"
                         )
-                        thumbnail_to_send = await thumb_file.download_as_bytearray()
-                        logger.info("✅ Thumbnail downloaded")
                     except Exception as e:
-                        logger.warning(f"⚠️ Thumbnail download failed: {e}")
+                        logger.warning("Thumbnail access failed %s", e)
 
                 # Build caption
                 if lulustream_link:
-                    post_caption = f"""
-🔥 **{filename}**
-
-📊 Size: {size_readable}
-
-▶️ **Watch Online:** {lulustream_link}
-
-💡 Click to stream video
-🇮🇳 #Indian #Terabox #Adult
-
-Via @{BOT_USERNAME}
-"""
+                    post_caption = (
+                        f"🔥 {filename}\n"
+                        f"📊 Size: {size_readable}\n\n"
+                        f"▶️ Watch Online:\n{lulustream_link}\n\n"
+                        f"💡 Click to stream video\n"
+                        f"🇮🇳 Indian Terabox Adult\n"
+                        f"Via @{BOT_USERNAME}"
+                    )
                 else:
                     bot_link = (
-                        f"https://t.me/{BOT_USERNAME}?start=file_{sent_message.message_id}"
+                        f"https://t.me/{BOT_USERNAME}"
+                        f"?start=file_{sent_message.message_id}"
                     )
-                    post_caption = f"""
-🔥 **{filename}**
+                    post_caption = (
+                        f"🔥 {filename}\n"
+                        f"📊 Size: {size_readable}\n\n"
+                        f"▶️ Watch Now:\n{bot_link}\n\n"
+                        f"💡 Click to watch via bot\n"
+                        f"🇮🇳 Indian Terabox\n"
+                        f"Via @{BOT_USERNAME}"
+                    )
 
-📊 Size: {size_readable}
-
-▶️ **Watch Now:** {bot_link}
-
-💡 Click to watch via bot
-🇮🇳 #Indian #Terabox
-
-Via @{BOT_USERNAME}
-"""
-
-                # Send to adult channel
+                # Send to adult channel – plain text
                 if thumb_file_id:
                     logger.info("📤 Sending adult post with thumbnail...")
                     await context.bot.send_photo(
                         chat_id=ADULT_CHANNEL_ID,
                         photo=thumb_file_id,
                         caption=post_caption,
-                        
                     )
                 else:
                     logger.info("📤 Sending adult post without thumbnail...")
                     await context.bot.send_message(
                         chat_id=ADULT_CHANNEL_ID,
                         text=post_caption,
-                        
                     )
 
                 logger.info("User %s Posted to adult channel", user_id)
 
             except Exception as e:
                 logger.error(
-                    f"⚠️ [User {user_id}] Adult channel post error: {e}", exc_info=True
+                    "⚠️ [User %s] Adult channel post error: %s",
+                    user_id,
+                    e,
+                    exc_info=True,
                 )
 
-        # Delete status message
+        # 8) Delete status message
         try:
             await status_msg.delete()
         except Exception:
             pass
 
-        # Send completion message based on verification status
+        # 9) Completion message based on verification status
         completion_msg = "✅ **File uploaded"
         if lulustream_link:
             completion_msg += " & posted to channel with streaming link"
@@ -582,19 +572,16 @@ Via @{BOT_USERNAME}
             verify_link = generate_monetized_verification_link(
                 context.bot.username, token
             )
-
             keyboard = [
-                [
-                    InlineKeyboardButton("✅ VERIFY FOR LEECH", url=verify_link),
-                ],
+                [InlineKeyboardButton("✅ VERIFY FOR LEECH", url=verify_link)],
                 [
                     InlineKeyboardButton(
-                        "📺 HOW TO VERIFY?", url="https://t.me/Sr_Movie_Links/52"
+                        "📺 HOW TO VERIFY?",
+                        url="https://t.me/Sr_Movie_Links/52",
                     )
                 ],
                 [InlineKeyboardButton("💬 ANY HELP", url="https://t.me/Siva9789")],
             ]
-
             await update.message.reply_text(
                 "🎬 **Leech Verification Required**\n\n"
                 f"You've used **{used_attempts}\\{FREE_LEECH_LIMIT} free leeches!**",
@@ -603,7 +590,8 @@ Via @{BOT_USERNAME}
             )
         else:
             await update.message.reply_text(
-                completion_msg + "♾️ **Status:** Verified User", parse_mode="Markdown"
+                completion_msg + "♾️ **Status:** Verified User",
+                parse_mode="Markdown",
             )
 
     except Exception as e:
@@ -616,7 +604,6 @@ Via @{BOT_USERNAME}
             )
         except Exception:
             pass
-
     finally:
         ACTIVE_TASKS.pop(user_id, None)
         ev = CANCEL_FLAGS.pop(user_id, None)
@@ -626,6 +613,8 @@ Via @{BOT_USERNAME}
             LEECH_SEMAPHORE.release()
         except Exception:
             pass
+         
+
 
 
 async def cancel_leech_callback(
