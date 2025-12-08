@@ -1,11 +1,10 @@
 """
-FREE scrapers for xVideos and xHamster
+FREE scraper for Indian adult videos using xHamster category feed.
 
 No paid APIs - only free libraries.
 """
 
 import logging
-import random
 from typing import List, Dict, Optional, Any
 
 import aiohttp
@@ -13,18 +12,18 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-# xVideos library (installed via xvideos-py)
+# xVideos (temporary disabled, too unstable on server)
 try:
-    from xvideos import XVideos
-    XVIDEOS_AVAILABLE = True
+    from xvideos import XVideos  # noqa: F401
+    XVIDEOS_AVAILABLE = False  # force disabled for now
 except ImportError:
-    logger.warning("⚠️ xvideos-py not installed. Install: pip install xvideos-py")
+    logger.warning("⚠️ xvideos-py not installed. xVideos scraper disabled.")
     XVIDEOS_AVAILABLE = False
 
-# xHamster uses plain HTML scraping
+# xHamster scraper using plain HTML
 XHAMSTER_AVAILABLE = True
 
-from adult_config import ILLEGAL_KEYWORDS, INDIAN_KEYWORDS  # MIN_VIEWS no longer used
+from adult_config import ILLEGAL_KEYWORDS  # keep only safety list
 
 
 def parse_views(raw: Any) -> int:
@@ -66,122 +65,22 @@ def is_illegal_content(title: str, tags: List[str] = []) -> bool:
     return False
 
 
-# -------------------- xVideos scraper --------------------
+# -------------------- xHamster Indian category scraper --------------------
 
 
-async def scrape_xvideos(keyword: str) -> List[Dict]:
+async def scrape_xhamster() -> List[Dict]:
     """
-    Scrape xVideos for content (FREE).
+    Scrape xHamster Indian category page.
 
-    No view-based filtering; only blocks illegal keywords.
-    """
-    if not XVIDEOS_AVAILABLE:
-        logger.error("❌ xVideos scraper not available")
-        return []
-
-    try:
-        logger.info(f"🔍 Scraping xVideos for: {keyword}")
-        xv = XVideos()
-
-        # Correct arguments for xvideos-py
-        results = xv.search(k=keyword, sort="views")
-
-        videos: List[Dict] = []
-        blocked = 0
-
-        for video in results.get("videos", [])[:20]:
-            # Basic fields from search result
-            base_title = video.get("title", "").strip()
-            base_tags = video.get("tags", [])
-
-            if not base_title:
-                continue
-
-            # First safety check
-            if is_illegal_content(base_title, base_tags):
-                blocked += 1
-                continue
-
-            try:
-                # Try to get full video details
-                try:
-                    video_info = xv.details(video["url"])
-                except AttributeError:
-                    video_info = xv.get_video(video["url"])
-
-                final_title = video_info.get("title", base_title)
-                final_tags = video_info.get("tags", base_tags)
-
-                # Final safety check
-                if is_illegal_content(final_title, final_tags):
-                    blocked += 1
-                    continue
-
-                # Download URL (for LuluStream remote upload)
-                download_url: Optional[str] = video_info.get("download_url")
-
-                if not download_url:
-                    files = video_info.get("files", {}) or {}
-                    if isinstance(files, dict) and files:
-                        download_url = (
-                            files.get("high")
-                            or files.get("hd")
-                            or files.get("low")
-                            or next(iter(files.values()), "")
-                        )
-
-                if not download_url:
-                    logger.debug(
-                        f"⚠️ xVideos: Skipped (no download URL): {final_title[:60]}"
-                    )
-                    continue
-
-                views_int = parse_views(video.get("views", 0))
-
-                videos.append(
-                    {
-                        "source": "xVideos",
-                        "title": final_title,
-                        "url": video["url"],
-                        "download_url": download_url,
-                        "thumbnail": video_info.get(
-                            "thumbnail", video_info.get("image", "")
-                        ),
-                        "duration": video_info.get("duration", "0:00"),
-                        "views": views_int,
-                        "tags": final_tags,
-                    }
-                )
-            except Exception as e:
-                logger.debug(f"⚠️ xVideos: skipped video due to error: {e}")
-                continue
-
-        logger.info(
-            f"✅ xVideos: Found {len(videos)} safe videos, blocked {blocked}"
-        )
-        # Limit to first 5 to avoid spamming; no view-based sorting/filtering.
-        return videos[:5]
-
-    except Exception as e:
-        logger.error(f"❌ xVideos scraping error: {e}")
-        return []
-
-
-# -------------------- xHamster scraper --------------------
-
-
-async def scrape_xhamster(keyword: str) -> List[Dict]:
-    """
-    Scrape xHamster search results (HTML).
-
-    No view-based filtering; only blocks illegal keywords.
+    Uses: https://xhamster.com/categories/indian/best
+    No keyword, no view-based filtering; only blocks illegal keywords.
     """
     if not XHAMSTER_AVAILABLE:
         logger.warning("⚠️ xHamster scraper disabled")
         return []
 
-    search_query = keyword.replace(" ", "+")
-    url = f"https://xhamster.desi/search/{search_query}"
+    # Stable Indian category feed. [web:291][web:292]
+    url = "https://xhamster.com/categories/indian/best"
 
     headers = {
         "User-Agent": (
@@ -194,7 +93,7 @@ async def scrape_xhamster(keyword: str) -> List[Dict]:
     blocked = 0
 
     try:
-        logger.info(f"🔍 Scraping xHamster for: {keyword}")
+        logger.info("🔍 Scraping xHamster Indian category feed")
         timeout = aiohttp.ClientTimeout(total=20)
 
         async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
@@ -207,13 +106,32 @@ async def scrape_xhamster(keyword: str) -> List[Dict]:
 
         soup = BeautifulSoup(html, "html.parser")
 
-        # Generic selectors – layout can change; this is best-effort
-        cards = soup.select("a.video-thumb, a.thumb-image, div.video-item a")[:30]
-        if not cards:
-            logger.warning("⚠️ xHamster: no cards found on page")
+        # Best-effort selectors for video cards; layout can change.
+        # Try multiple patterns to reduce "no cards found" issues.
+        cards = []
+
+        cards.extend(soup.select("a.video-thumb"))
+        cards.extend(soup.select("a.thumb-image"))
+        cards.extend(soup.select("article video a"))
+        cards.extend(soup.select("div.video-item a"))
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique_cards = []
+        for c in cards:
+            key = (c.get("href"), c.get("title"))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_cards.append(c)
+
+        unique_cards = unique_cards[:30]
+
+        if not unique_cards:
+            logger.warning("⚠️ xHamster: no cards found on Indian category page")
             return []
 
-        for card in cards:
+        for card in unique_cards:
             try:
                 title = (card.get("title") or card.get("aria-label") or "").strip()
                 if not title:
@@ -224,7 +142,7 @@ async def scrape_xhamster(keyword: str) -> List[Dict]:
 
                 href = card.get("href") or ""
                 if not href.startswith("http"):
-                    href = "https://xhamster.desi" + href
+                    href = "https://xhamster.com" + href
 
                 thumb = (
                     card.get("data-src")
@@ -240,7 +158,7 @@ async def scrape_xhamster(keyword: str) -> List[Dict]:
                 if duration_el:
                     duration = duration_el.get_text(strip=True)
 
-                # Views only for display; not for filtering
+                # Views only for caption display
                 views_int = 0
                 views_el = card.select_one(
                     ".video-thumb__views, .thumb-views, .views"
@@ -258,7 +176,7 @@ async def scrape_xhamster(keyword: str) -> List[Dict]:
                         "source": "xHamster",
                         "title": title,
                         "url": href,
-                        # LuluStream remote upload can use the page URL
+                        # LuluStream remote upload can use the page URL directly
                         "download_url": href,
                         "thumbnail": thumb,
                         "duration": duration,
@@ -274,6 +192,7 @@ async def scrape_xhamster(keyword: str) -> List[Dict]:
         logger.info(
             f"✅ xHamster: Found {len(videos)} safe videos, blocked {blocked}"
         )
+        # Limit to first 5 to avoid flooding; no sorting/filtering by views.
         return videos[:5]
 
     except Exception as e:
@@ -281,30 +200,21 @@ async def scrape_xhamster(keyword: str) -> List[Dict]:
         return []
 
 
-# -------------------- Multi-site helper --------------------
+# -------------------- Multi-site wrapper --------------------
 
 
 async def scrape_all_sites(keyword: str = None) -> List[Dict]:
     """
     Scrape all available sites and return combined results.
 
-    - If keyword is None, chooses randomly from INDIAN_KEYWORDS defined in adult_config:
-      e.g. ["indian", "india", "desi", "tamil sex video", "desi sex video"]. [file:247]
-    - No view-based filtering or sorting.
+    Currently only xHamster Indian category is used.
+    Keyword is ignored (kept only for backward compatibility with callers).
     """
-    if not keyword:
-        keyword = random.choice(INDIAN_KEYWORDS)
-
-    logger.info(f"🔎 Multi-site scrape with keyword: {keyword}")
-
+    logger.info("🔎 Multi-site scrape (xHamster Indian category only)")
     all_videos: List[Dict] = []
 
-    if XVIDEOS_AVAILABLE:
-        xv_videos = await scrape_xvideos(keyword)
-        all_videos.extend(xv_videos)
-
     if XHAMSTER_AVAILABLE:
-        xh_videos = await scrape_xhamster(keyword)
+        xh_videos = await scrape_xhamster()
         all_videos.extend(xh_videos)
 
     logger.info(f"📊 Total videos found: {len(all_videos)}")
@@ -314,11 +224,11 @@ async def scrape_all_sites(keyword: str = None) -> List[Dict]:
 def format_views(views: int) -> str:
     """
     Format view count for captions: 1.2M, 500K, etc.
-
-    adult_automation.py uses this when building the Telegram caption. [file:248]
+    adult_automation.py uses this when building the Telegram caption.
     """
     if views >= 1_000_000:
         return f"{views / 1_000_000:.1f}M"
     if views >= 1_000:
         return f"{views / 1_000:.0f}K"
     return str(views)
+                  
