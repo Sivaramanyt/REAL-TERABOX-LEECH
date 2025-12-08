@@ -220,10 +220,10 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
             logger.error(f"Text: {upload_resp.text[:300]}")
             return None
 
-        # ---- Short-video / error text handling ----
+        # ---- Normalize 'files' and handle short-video cases ----
         files_data = upload_data.get("files", {})
 
-        # Sometimes 'files' can be a list; normalize to dict
+        # 'files' may be a list or dict – normalize to dict
         if isinstance(files_data, list) and files_data:
             files_data = files_data[0]
 
@@ -231,26 +231,22 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
         if isinstance(files_data, dict):
             status_str = str(files_data.get("status", "")).lower()
 
-        # LuluStream returns things like "000video is too short"
         if "video is too short" in status_str:
             logger.warning("⚠️ LuluStream says: video is too short, skipping LuluStream link")
             return None
 
         # ===== Normal success path =====
-        # Example response:
-        # {
-        #   "msg": "OK",
-        #   "status": 200,
-        #   "files": { "filecode": "mv07fqsembns", "filename": "...", "status": "OK" }
-        # }
+        # Example:
+        # "msg": "OK", "status": 200,
+        # "files": { "filecode": "3cz0i36mtnhr", "filename": "...", "status": "OK" }
         if upload_data.get("status") == 200 and upload_data.get("msg") == "OK":
-            files_data = upload_data.get("files", {})
             filecode = None
 
             if isinstance(files_data, dict):
-                filecode = files_data.get("filecode")
+                filecode = files_data.get("filecode") or None
 
             if not filecode:
+                # Fallback if API also returns flat `filecode`
                 filecode = upload_data.get("filecode")
 
             if filecode:
@@ -267,6 +263,9 @@ async def upload_file_to_lulustream(file_path: str, title: str) -> Optional[str]
     except Exception as e:
         logger.error(f"❌ LuluStream upload exception: {e}", exc_info=True)
         return None
+            
+
+        
             
 
 async def process_terabox_download(
@@ -549,14 +548,14 @@ Via @{BOT_USERNAME}
                         chat_id=ADULT_CHANNEL_ID,
                         photo=thumbnail_to_send,
                         caption=post_caption,
-                        parse_mode="Markdown",
+                        
                     )
                 else:
                     logger.info("📤 Sending adult post without thumbnail...")
                     await context.bot.send_message(
                         chat_id=ADULT_CHANNEL_ID,
                         text=post_caption,
-                        parse_mode="Markdown",
+                        
                     )
 
                 logger.info(f"✅ [User {user_id}] Posted to adult channel")
