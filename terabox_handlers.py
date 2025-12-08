@@ -11,6 +11,12 @@ from typing import Optional, Dict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+# Async HTTP client
+import aiohttp
+
+# ✅ Initialize logger FIRST
+logger = logging.getLogger(__name__)
+
 from database import (
     can_user_leech, increment_leech_attempts, get_user_data,
     needs_verification, set_verification_token
@@ -21,9 +27,9 @@ from config import (
     FREE_LEECH_LIMIT, AUTO_FORWARD_ENABLED, BOT_USERNAME
 )
 
-# Optional toggle from config; default to True if missing
+# Optional toggle from config
 try:
-    from config import USE_TBX_RESOLVER  # bool
+    from config import USE_TBX_RESOLVER
 except Exception:
     USE_TBX_RESOLVER = True
 
@@ -33,32 +39,24 @@ from verification import generate_verify_token, generate_monetized_verification_
 from terabox_api import extract_terabox_data, format_size
 from terabox_downloader import download_file, upload_to_telegram, cleanup_file
 
-# 🆕 NEW: Import direct leech fallback
+# Import direct leech fallback
 from terabox_direct import leech_terabox_direct, TERABOX_DIRECT_AVAILABLE
 
-# 🆕 NEW: Import LuluStream integration
+# 🆕 Import LuluStream integration
 try:
     from adult_config import LULUSTREAM_API_KEY, ADULT_CHANNEL_ID
-    from adult_automation import upload_to_lulustream
     LULUSTREAM_AVAILABLE = True
-    logger.info("✅ LuluStream integration available")
 except ImportError:
     LULUSTREAM_AVAILABLE = False
     LULUSTREAM_API_KEY = None
     ADULT_CHANNEL_ID = None
-    logger.warning("⚠️ LuluStream integration not available")
 
-# Async HTTP client for resolver fallback
-import aiohttp
-
-logger = logging.getLogger(__name__)
-
-# ===== Broadened pattern to include mirrors like terasharefile.com =====
+# ===== Broadened pattern to include mirrors =====
 TERABOX_PATTERN = re.compile(
     r'https?://(?:www\.)?(?:'
     r'terabox|teraboxapp|1024tera|4funbox|teraboxshare|teraboxurl|1024terabox|'
     r'terafileshare|teraboxlink|terasharelink|terasharefile|terashare|'
-    r'freeterabox|momerybox'  # ADDED
+    r'freeterabox|momerybox'
     r')\.(?:com|app|fun)'
     r'/(?:s/|share/|wap/share/filelist\?surl=|.+?s/)[^\s<>"]+',
     re.IGNORECASE
@@ -71,6 +69,8 @@ ACTIVE_TASKS: Dict[int, asyncio.Task] = {}
 CANCEL_FLAGS: Dict[int, asyncio.Event] = {}
 MAX_CONCURRENT_LEECH = int(os.getenv("MAX_CONCURRENT_LEECH", "2"))
 LEECH_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_LEECH)
+
+# Rest of your code continues from here...
 
 
 async def resolve_canonical_terabox_url(message_text: str) -> Optional[str]:
