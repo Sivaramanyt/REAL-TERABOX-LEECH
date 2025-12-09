@@ -177,55 +177,8 @@ def main():
         )
         application.add_handler(CallbackQueryHandler(verify_callback))  # keep last
 
-        # ========== ADULT CONTENT AUTOMATION (OLD SCRAPER) ==========
-        try:
-            from adult_handlers import adult_status, adult_manual_scrape, adult_search
-            from adult_automation import auto_scrape_and_post
-            from adult_config import (
-                LULUSTREAM_API_KEY,
-                ADULT_CHANNEL_ID,
-                SCRAPE_HOURS,
-            )
-            from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-            if LULUSTREAM_API_KEY and ADULT_CHANNEL_ID:
-                logger.info("🔧 Setting up adult content automation (scraper)...")
-
-                # Admin commands
-                application.add_handler(CommandHandler("adultstatus", adult_status))
-                application.add_handler(
-                    CommandHandler("adultscrape", adult_manual_scrape)
-                )
-                application.add_handler(CommandHandler("adultsearch", adult_search))
-
-                scheduler = AsyncIOScheduler()
-                for hour in SCRAPE_HOURS:
-                    scheduler.add_job(
-                        lambda: asyncio.create_task(
-                            auto_scrape_and_post(application.bot)
-                        ),
-                        "cron",
-                        hour=int(hour),
-                        minute=0,
-                    )
-
-                scheduler.start()
-                logger.info("✅ Adult content automation (scraper) enabled")
-                logger.info(
-                    f"📅 Scheduled for hours: {', '.join(SCRAPE_HOURS)}"
-                )
-            else:
-                logger.info(
-                    "⚠️ Adult automation disabled (LULUSTREAM_API_KEY or ADULT_CHANNEL_ID not set)"
-                )
-        except ImportError as e:
-            logger.warning(f"⚠️ Adult automation not available: {e}")
-        except Exception as e:
-            logger.error(f"❌ Adult automation setup error: {e}")
-
         # ========== ADULT SOURCE CHANNEL AUTOMATION (NEW) ==========
         try:
-            # Handlers implemented in adult_source_handlers.py
             from adult_source_handlers import (
                 handle_source_video,
                 handle_source_link,
@@ -276,4 +229,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                   
