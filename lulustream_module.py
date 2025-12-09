@@ -1,6 +1,9 @@
 """
 🎥 Lulustream Auto Upload Module
 Compatible with python-telegram-bot library
+- Source Channel Monitoring
+- Direct Link Only (No Embed)
+- Auto-upload to Adult Channel
 """
 
 import os
@@ -8,8 +11,8 @@ import asyncio
 import aiohttp
 from typing import Dict, Optional
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from telegram.ext import ContextTypes, MessageHandler, filters
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +20,13 @@ logger = logging.getLogger(__name__)
 class LulustreamConfig:
     """Configuration for Lulustream module"""
     API_KEY = os.environ.get("LULUSTREAM_API_KEY", "")
+    
+    # Source channel where videos are posted
+    SOURCE_CHANNEL_ID = int(os.environ.get("SOURCE_CHANNEL_ID", "0"))
+    
+    # Adult channel where Lulustream links will be posted
     ADULT_CHANNEL_ID = int(os.environ.get("ADULT_CHANNEL_ID", "0"))
+    
     AUTO_UPLOAD = os.environ.get("AUTO_LULUSTREAM", "True").lower() == "true"
     DEFAULT_TAGS = os.environ.get("LULU_TAGS", "tamil,adult,movies,hd")
     UPLOAD_FOLDER_ID = os.environ.get("LULU_FOLDER_ID", "")
@@ -64,6 +73,7 @@ class LulustreamUploader:
                 payload["folder_id"] = LulustreamConfig.UPLOAD_FOLDER_ID
             
             logger.info(f"🎬 Uploading to Lulustream: {title}")
+            logger.info(f"📹 Video URL: {video_url[:50]}...")
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -74,6 +84,7 @@ class LulustreamUploader:
                 ) as response:
                     
                     response_text = await response.text()
+                    logger.info(f"Response: {response_text[:200]}")
                     
                     if response.status == 200:
                         try:
@@ -97,7 +108,7 @@ class LulustreamUploader:
                         
                         return {
                             "success": False,
-                            "error": result.get("result", "Upload failed")
+                            "error": result.get("result", "Upload failed - Unknown error")
                         }
                     else:
                         return {
@@ -106,10 +117,30 @@ class LulustreamUploader:
                         }
                         
         except asyncio.TimeoutError:
-            return {"success": False, "error": "Upload timeout"}
+            logger.error("⏱️ Upload timeout")
+            return {"success": False, "error": "Upload timeout (5 min exceeded)"}
         except Exception as e:
-            logger.error(f"Upload exception: {e}")
+            logger.error(f"❌ Upload exception: {e}")
             return {"success": False, "error": str(e)}
+    
+    
+    async def get_video_info(self, file_code: str) -> Dict:
+        """Get video information from Lulustream"""
+        try:
+            url = f"https://lulustream.com/api/file/info"
+            params = {
+                "key": self.api_key,
+                "file_code": file_code
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        return await response.json()
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting video info: {e}")
+            return {}
 
 
 class LulustreamTelegramBot:
@@ -160,6 +191,7 @@ class LulustreamTelegramBot:
             logger.error(f"Auto-upload exception: {e}")
             return {"success": False, "error": str(e)}
     
+    
     async def post_to_adult_channel(
         self,
         result: Dict,
@@ -167,36 +199,43 @@ class LulustreamTelegramBot:
         caption: str = None,
         download_url: str = None
     ):
-        """Post video to adult channel"""
+        """Post video to adult channel with DIRECT LINK ONLY"""
         try:
             if not LulustreamConfig.ADULT_CHANNEL_ID:
+                logger.warning("⚠️ Adult channel ID not configured")
                 return
             
+            # Caption with DIRECT LINK ONLY (no embed)
             post_caption = f"""
 🔞 **{result['title']}**
 
-▶️ **Watch Online:** {result['watch_url']}
-📺 **Embed Player:** {result['embed_url']}
+🎬 **Watch Here:** {result['watch_url']}
 """
             
+            # Optional: Add download link
             if download_url:
-                post_caption += f"📥 **Direct Download:** {download_url}\n"
+                post_caption += f"\n📥 **Download:** {download_url}\n"
             
-            if caption:
-                post_caption += f"\n{caption}\n"
+            # Optional: Add custom caption
+            if caption and len(caption) > 0:
+                # Extract relevant info from caption (skip URLs)
+                caption_lines = [line for line in caption.split('\n') if not line.startswith('http')]
+                if caption_lines:
+                    post_caption += f"\n📝 {' '.join(caption_lines[:2])}\n"
             
             post_caption += f"""
 ⚠️ **Adults Only | 18+**
-🏷️ Tags: {result.get('tags', 'N/A')}
+🏷️ {result.get('tags', 'N/A')}
             """
             
+            # Single button with DIRECT LINK only
             buttons = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("▶️ Watch Now", url=result['watch_url']),
-                    InlineKeyboardButton("📺 Embed", url=result['embed_url'])
+                    InlineKeyboardButton("▶️ Watch Now", url=result['watch_url'])
                 ]
             ])
             
+            # Send to adult channel
             if thumbnail:
                 await self.bot.send_photo(
                     chat_id=LulustreamConfig.ADULT_CHANNEL_ID,
@@ -213,10 +252,106 @@ class LulustreamTelegramBot:
                     parse_mode='Markdown'
                 )
             
-            logger.info(f"📢 Posted to adult channel: {result['file_code']}")
+            logger.info(f"📢 Posted to adult channel with DIRECT link: {result['watch_url']}")
             
         except Exception as e:
             logger.error(f"Error posting to adult channel: {e}")
+
+
+# ============= SOURCE CHANNEL MONITOR =============
+
+async def monitor_source_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Monitor SOURCE channel for new videos and auto-upload to Lulustream
+    This handler will be triggered when a video is posted in SOURCE_CHANNEL
+    """
+    try:
+        message = update.channel_post
+        if not message:
+            return
+        
+        # Check if message is from SOURCE channel
+        if message.chat.id != LulustreamConfig.SOURCE_CHANNEL_ID:
+            return
+        
+        # Check if auto-upload is enabled
+        if not LulustreamConfig.AUTO_UPLOAD:
+            logger.info("⏸️ Auto-upload disabled, skipping...")
+            return
+        
+        # Get video/document
+        video = message.video or message.document
+        if not video:
+            return
+        
+        logger.info(f"📹 New video detected in source channel: {message.message_id}")
+        
+        # Extract details
+        caption = message.caption or "Untitled Video"
+        title = caption.split("\n")[0] if caption else "Untitled Video"  # First line as title
+        
+        # Clean title (remove emojis and extra characters)
+        import re
+        title = re.sub(r'[^\w\s\-\(\)]', '', title)[:100]  # Clean and limit to 100 chars
+        
+        # Get thumbnail
+        thumbnail_file_id = None
+        if video.thumbnail:
+            thumbnail_file_id = video.thumbnail.file_id
+        
+        # Extract direct download link from caption
+        direct_link = None
+        if caption:
+            lines = caption.split("\n")
+            for line in lines:
+                # Look for URLs in caption
+                if "http" in line.lower():
+                    # Extract URL from line
+                    words = line.split()
+                    for word in words:
+                        if word.startswith("http"):
+                            # Check if it's a video link
+                            if any(ext in word.lower() for ext in ['.mp4', '.mkv', '.avi', '.mov', 'download', 'terabox', 'drive', 'stream']):
+                                direct_link = word.strip()
+                                break
+                            # Or just any http link
+                            elif not any(skip in word.lower() for skip in ['t.me', 'telegram', 'youtube.com/watch']):
+                                direct_link = word.strip()
+                                break
+                if direct_link:
+                    break
+        
+        if not direct_link:
+            logger.warning("⚠️ No direct download link found in caption")
+            logger.info("Caption content:")
+            logger.info(caption)
+            # Skip if no direct link
+            return
+        
+        logger.info(f"🔗 Direct link found: {direct_link[:50]}...")
+        
+        # Upload to Lulustream
+        lulu_bot = get_lulustream_uploader()
+        if not lulu_bot:
+            logger.error("❌ Lulustream bot not initialized")
+            return
+        
+        result = await lulu_bot.auto_upload_and_post(
+            video_url=direct_link,
+            title=title,
+            thumbnail=thumbnail_file_id,
+            caption=caption
+        )
+        
+        if result["success"]:
+            logger.info(f"✅ Successfully processed: {result['watch_url']}")
+        else:
+            logger.error(f"❌ Upload failed: {result['error']}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error in source channel monitor: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 
 # Global instance
@@ -228,6 +363,9 @@ def init_lulustream_telegram(bot):
     global _lulustream_bot
     _lulustream_bot = LulustreamTelegramBot(bot)
     logger.info("🎬 Lulustream Telegram module initialized")
+    logger.info(f"   📺 Source Channel: {LulustreamConfig.SOURCE_CHANNEL_ID}")
+    logger.info(f"   🔞 Adult Channel: {LulustreamConfig.ADULT_CHANNEL_ID}")
+    logger.info(f"   ⚙️ Auto-Upload: {'✅ Enabled' if LulustreamConfig.AUTO_UPLOAD else '❌ Disabled'}")
     return _lulustream_bot
 
 
@@ -252,7 +390,8 @@ async def handle_lulu_upload_command(update: Update, context: ContextTypes.DEFAU
                 "**Usage:**\n"
                 "`/uploadlulu <direct_url> [title]`\n\n"
                 "**Example:**\n"
-                "`/uploadlulu https://example.com/video.mp4 Tamil Movie`",
+                "`/uploadlulu https://example.com/video.mp4 Tamil Movie`\n\n"
+                "**Note:** URL must be direct video link",
                 parse_mode='Markdown'
             )
             return
@@ -261,12 +400,13 @@ async def handle_lulu_upload_command(update: Update, context: ContextTypes.DEFAU
         title = " ".join(args[1:]) if len(args) > 1 else "Untitled Video"
         
         if not video_url.startswith(("http://", "https://")):
-            await update.message.reply_text("❌ Invalid URL")
+            await update.message.reply_text("❌ Invalid URL. Must start with http:// or https://")
             return
         
         status = await update.message.reply_text(
             f"⏳ **Uploading to Lulustream...**\n\n"
-            f"📝 Title: `{title}`",
+            f"📝 Title: `{title}`\n"
+            f"🔗 URL: `{video_url[:50]}...`",
             parse_mode='Markdown'
         )
         
@@ -278,10 +418,10 @@ async def handle_lulu_upload_command(update: Update, context: ContextTypes.DEFAU
         )
         
         if result["success"]:
+            # Single button with DIRECT LINK only
             buttons = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("▶️ Watch", url=result['watch_url']),
-                    InlineKeyboardButton("📺 Embed", url=result['embed_url'])
+                    InlineKeyboardButton("▶️ Watch Now", url=result['watch_url'])
                 ]
             ])
             
@@ -289,18 +429,24 @@ async def handle_lulu_upload_command(update: Update, context: ContextTypes.DEFAU
                 f"✅ **Upload Successful!**\n\n"
                 f"📝 **Title:** `{title}`\n"
                 f"🆔 **File Code:** `{result['file_code']}`\n"
-                f"🔗 **Watch URL:** `{result['watch_url']}`\n"
-                f"📺 **Embed URL:** `{result['embed_url']}`",
+                f"🎬 **Direct Link:** `{result['watch_url']}`\n"
+                f"🏷️ **Tags:** `{result.get('tags', 'N/A')}`",
                 reply_markup=buttons,
                 parse_mode='Markdown'
             )
         else:
             await status.edit_text(
-                f"❌ **Upload Failed**\n\n`{result['error']}`",
+                f"❌ **Upload Failed**\n\n"
+                f"**Error:** `{result['error']}`\n\n"
+                f"**Troubleshooting:**\n"
+                f"• Check API key is correct\n"
+                f"• Verify URL is accessible\n"
+                f"• Ensure video format is supported",
                 parse_mode='Markdown'
             )
             
     except Exception as e:
+        logger.error(f"Manual upload error: {e}")
         await update.message.reply_text(f"❌ Error: `{str(e)}`", parse_mode='Markdown')
 
 
@@ -310,18 +456,41 @@ async def handle_lulu_info_command(update: Update, context: ContextTypes.DEFAULT
         args = context.args
         if len(args) < 1:
             await update.message.reply_text(
-                "**Usage:** `/luluinfo <file_code>`",
+                "**ℹ️ Get Video Info**\n\n"
+                "**Usage:** `/luluinfo <file_code>`\n\n"
+                "**Example:** `/luluinfo abc123xyz`",
                 parse_mode='Markdown'
             )
             return
         
-        await update.message.reply_text(
-            f"ℹ️ File Code: `{args[0]}`\n"
-            f"🔗 URL: `https://lulustream.com/{args[0]}`",
-            parse_mode='Markdown'
-        )
+        file_code = args[0]
+        status = await update.message.reply_text("⏳ Fetching video info...")
+        
+        uploader = LulustreamUploader()
+        info = await uploader.get_video_info(file_code)
+        
+        if info and info.get("status") == 200:
+            data = info.get("result", {})
+            await status.edit_text(
+                f"**📹 Video Information**\n\n"
+                f"🆔 **File Code:** `{file_code}`\n"
+                f"📝 **Title:** `{data.get('title', 'N/A')}`\n"
+                f"👁️ **Views:** `{data.get('views', 0)}`\n"
+                f"📊 **Status:** `{data.get('status', 'N/A')}`\n"
+                f"📅 **Uploaded:** `{data.get('created', 'N/A')}`\n"
+                f"🎬 **Direct Link:** `https://lulustream.com/{file_code}`",
+                parse_mode='Markdown'
+            )
+        else:
+            await status.edit_text(
+                f"ℹ️ **File Code:** `{file_code}`\n"
+                f"🎬 **Direct Link:** `https://lulustream.com/{file_code}`\n\n"
+                f"_Detailed info not available_",
+                parse_mode='Markdown'
+            )
+                
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"❌ Error: `{str(e)}`", parse_mode='Markdown')
 
 
 async def handle_lulu_toggle_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -332,7 +501,8 @@ async def handle_lulu_toggle_command(update: Update, context: ContextTypes.DEFAU
         
         await update.message.reply_text(
             f"**⚙️ Auto-Upload Settings**\n\n"
-            f"Status: **{status}**",
+            f"**Status:** {status}\n\n"
+            f"{'Videos will now automatically upload to Lulustream when posted in source channel.' if LulustreamConfig.AUTO_UPLOAD else 'Auto-upload is disabled. Use /uploadlulu for manual uploads.'}",
             parse_mode='Markdown'
         )
     except Exception as e:
@@ -344,18 +514,44 @@ async def handle_lulu_help_command(update: Update, context: ContextTypes.DEFAULT
     help_text = f"""
 **🎬 Lulustream Module Help**
 
-**Available Commands:**
+**📋 Available Commands:**
 
 `/uploadlulu <url> [title]` - Manual video upload
 `/luluinfo <file_code>` - Get video information  
 `/togglelulu` - Toggle auto-upload
 `/luluhelp` - Show this help
 
-**Configuration:**
+**⚙️ Configuration:**
 • API Key: {'✅ Set' if LulustreamConfig.API_KEY else '❌ Not Set'}
-• Adult Channel: {'✅ Set' if LulustreamConfig.ADULT_CHANNEL_ID else '❌ Not Set'}
+• Source Channel: {'✅ Set (ID: ' + str(LulustreamConfig.SOURCE_CHANNEL_ID) + ')' if LulustreamConfig.SOURCE_CHANNEL_ID else '❌ Not Set'}
+• Adult Channel: {'✅ Set (ID: ' + str(LulustreamConfig.ADULT_CHANNEL_ID) + ')' if LulustreamConfig.ADULT_CHANNEL_ID else '❌ Not Set'}
 • Auto-Upload: {'✅ Enabled' if LulustreamConfig.AUTO_UPLOAD else '❌ Disabled'}
 
-**Support:** Contact bot owner
+**🔄 How It Works:**
+1. Post video with direct link in **Source Channel**
+2. Bot detects and uploads to **Lulustream**
+3. Direct link posted to **Adult Channel**
+4. Users click and watch
+
+**📝 Note:** 
+- Only **direct links** are posted (no embed)
+- Ensure video URLs are in caption
+- Tags: `{LulustreamConfig.DEFAULT_TAGS}`
+
+**💬 Support:** Contact bot owner
     """
     await update.message.reply_text(help_text, parse_mode='Markdown')
+
+
+def get_source_channel_handler():
+    """Get the message handler for source channel monitoring"""
+    if LulustreamConfig.SOURCE_CHANNEL_ID:
+        return MessageHandler(
+            filters.Chat(chat_id=LulustreamConfig.SOURCE_CHANNEL_ID) & 
+            filters.ChatType.CHANNEL & 
+            (filters.VIDEO | filters.Document.ALL),
+            monitor_source_channel
+        )
+    else:
+        logger.warning("⚠️ SOURCE_CHANNEL_ID not configured, channel monitoring disabled")
+        return None
