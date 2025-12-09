@@ -1,38 +1,59 @@
 """
 Terabox Leech Bot with Universal Shortlink Verification & Auto-Forward & Random Videos
-+ Lulustream Auto Upload Module
++ Lulustream Auto Upload Module (Direct Link Only)
 """
 
 import logging
-import asyncio
 import sys
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes,
+)
 from config import *
 from handlers import (
-    start, help_command, leech_attempt, verify_callback,
-    stats, test_forward, test_shortlink, reset_verify,
+    start,
+    help_command,
+    leech_attempt,
+    verify_callback,
+    stats,
+    test_forward,
+    test_shortlink,
+    reset_verify,
     reset_video_verify,
-    dashboard_callback
+    dashboard_callback,
 )
 
 from database import db
 from health_server import run_health_server
 
 # Import Terabox handlers (+ cancel)
-from terabox_handlers import handle_terabox_link, cancel_leech_callback, cancel_current_leech
+from terabox_handlers import (
+    handle_terabox_link,
+    cancel_leech_callback,
+    cancel_current_leech,
+)
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
 logger = logging.getLogger(__name__)
 
 # Random Videos Module
 try:
-    from random_videos import send_random_video, handle_random_video_callback, auto_save_video
+    from random_videos import (
+        send_random_video,
+        handle_random_video_callback,
+        auto_save_video,
+    )
+
     RANDOM_VIDEOS_ENABLED = True
 except ImportError:
     logger.warning("⚠️ random_videos.py not found - Random videos feature disabled")
@@ -41,6 +62,7 @@ except ImportError:
 # Channel Monitor Module
 try:
     from channel_monitor import cleanup_invalid_videos
+
     CHANNEL_MONITOR_ENABLED = True
 except ImportError:
     logger.warning("⚠️ channel_monitor.py not found - Auto-cleanup disabled")
@@ -49,18 +71,21 @@ except ImportError:
 # ============= LULUSTREAM MODULE =============
 try:
     from lulustream_module import (
-        init_lulustream_telegram, 
+        init_lulustream_telegram,
         handle_lulu_upload_command,
         handle_lulu_info_command,
         handle_lulu_toggle_command,
         handle_lulu_help_command,
         get_source_channel_handler,
-        get_lulustream_uploader
+        get_lulustream_uploader,
     )
+
     LULUSTREAM_ENABLED = True
     logger.info("✅ Lulustream module imported successfully")
 except ImportError as e:
-    logger.warning(f"⚠️ lulustream_module.py not found - Lulustream feature disabled: {e}")
+    logger.warning(
+        f"⚠️ lulustream_module.py not found - Lulustream feature disabled: {e}"
+    )
     LULUSTREAM_ENABLED = False
 # ============================================
 
@@ -106,24 +131,31 @@ def display_startup_info():
 
 async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        # Ignore channel posts / service messages
+        if update.message is None or update.effective_user is None:
+            return
+
         handled = await handle_terabox_link(update, context)
         if not handled:
             await leech_attempt(update, context)
     except Exception as e:
         logger.error(f"❌ Message router error: {e}")
-        await update.message.reply_text("❌ An error occurred while processing your message. Please try again.")
+        if update.message:
+            await update.message.reply_text(
+                "❌ An error occurred while processing your message. Please try again."
+            )
 
 
 def main():
     try:
         display_startup_info()
-        
+
         logger.info("🏥 Starting health server...")
         run_health_server()
-        
+
         logger.info("🤖 Creating bot application...")
         application = Application.builder().token(BOT_TOKEN).build()
-        
+
         # ============= INITIALIZE LULUSTREAM =============
         if LULUSTREAM_ENABLED:
             try:
@@ -131,77 +163,97 @@ def main():
                 logger.info("✅ Lulustream module initialized successfully")
             except Exception as e:
                 logger.error(f"❌ Failed to initialize Lulustream: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
         # ================================================
-        
+
         logger.info("⚙️ Registering handlers...")
-        
+
         # Basic Commands
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("leech", leech_attempt))
         application.add_handler(CommandHandler("stats", stats))
         application.add_handler(CommandHandler("cancel", cancel_current_leech))
-        
+
         # Random Videos Module
         if RANDOM_VIDEOS_ENABLED:
             application.add_handler(CommandHandler("videos", send_random_video))
-            application.add_handler(CallbackQueryHandler(handle_random_video_callback, pattern="^random_video$"))
-            application.add_handler(MessageHandler(
-                filters.ChatType.CHANNEL & (filters.VIDEO | filters.Document.ALL),
-                auto_save_video
-            ))
+            application.add_handler(
+                CallbackQueryHandler(
+                    handle_random_video_callback, pattern="^random_video$"
+                )
+            )
+            application.add_handler(
+                MessageHandler(
+                    filters.ChatType.CHANNEL & (filters.VIDEO | filters.Document.ALL),
+                    auto_save_video,
+                )
+            )
             logger.info("✅ Random videos module handlers registered")
-        
+
         # Channel Monitor Module
         if CHANNEL_MONITOR_ENABLED:
-            application.add_handler(CommandHandler("cleanup_videos", cleanup_invalid_videos))
+            application.add_handler(
+                CommandHandler("cleanup_videos", cleanup_invalid_videos)
+            )
             logger.info("✅ Channel monitor handlers registered")
-        
+
         # ============= LULUSTREAM COMMANDS & MONITOR =============
         if LULUSTREAM_ENABLED:
             # Command handlers
-            application.add_handler(CommandHandler("uploadlulu", handle_lulu_upload_command))
-            application.add_handler(CommandHandler("luluinfo", handle_lulu_info_command))
-            application.add_handler(CommandHandler("togglelulu", handle_lulu_toggle_command))
-            application.add_handler(CommandHandler("luluhelp", handle_lulu_help_command))
-            
+            application.add_handler(
+                CommandHandler("uploadlulu", handle_lulu_upload_command)
+            )
+            application.add_handler(
+                CommandHandler("luluinfo", handle_lulu_info_command)
+            )
+            application.add_handler(
+                CommandHandler("togglelulu", handle_lulu_toggle_command)
+            )
+            application.add_handler(
+                CommandHandler("luluhelp", handle_lulu_help_command)
+            )
+
             # Source channel monitor
             source_handler = get_source_channel_handler()
             if source_handler:
                 application.add_handler(source_handler)
                 logger.info("✅ Lulustream source channel monitor registered")
-            
+
             logger.info("✅ Lulustream commands registered")
         # ========================================================
-        
+
         # Test & Admin Commands
         application.add_handler(CommandHandler("testforward", test_forward))
         application.add_handler(CommandHandler("testapi", test_shortlink))
         application.add_handler(CommandHandler("resetverify", reset_verify))
         application.add_handler(CommandHandler("resetvideos", reset_video_verify))
-        
+
         # Callback Handlers
         application.add_handler(CallbackQueryHandler(dashboard_callback))
-        application.add_handler(CallbackQueryHandler(cancel_leech_callback, pattern=r"^cancel_leech:\d+$"))
-        
+        application.add_handler(
+            CallbackQueryHandler(
+                cancel_leech_callback, pattern=r"^cancel_leech:\d+$"
+            )
+        )
+
         # Message Handlers (keep at end)
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
+        application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, message_router)
+        )
         application.add_handler(CallbackQueryHandler(verify_callback))
-        
+
         logger.info("✅ All handlers registered successfully")
         logger.info("🚀 Starting bot polling...")
-        
-        application.run_polling(allowed_updates=["message", "callback_query", "channel_post"])
-        
+
+        application.run_polling(
+            allowed_updates=["message", "callback_query", "channel_post"]
+        )
+
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-                   
+    
