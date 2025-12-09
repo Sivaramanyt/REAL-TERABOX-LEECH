@@ -10,7 +10,7 @@ import asyncio
 import aiohttp
 import logging
 import re
-from typing import Dict
+from typing import Dict, Optional
 
 from telegram import (
     Update,
@@ -51,8 +51,8 @@ class LulustreamUploader:
         video_url: str,
         title: str = "Video",
         is_adult: bool = True,
-        tags: str = None,
-        folder_id: str = None,
+        tags: Optional[str] = None,
+        folder_id: Optional[str] = None,
         public: bool = True,
     ) -> Dict:
         """Upload video to Lulustream using direct URL (remote upload)."""
@@ -79,7 +79,7 @@ class LulustreamUploader:
                 payload["folder_id"] = LulustreamConfig.UPLOAD_FOLDER_ID
 
             logger.info(f"🎬 Uploading to Lulustream: {title}")
-            logger.info(f"📹 Video URL: {video_url[:80]}")
+            logger.info(f"📹 Video URL: {video_url[:120]}")
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -89,7 +89,7 @@ class LulustreamUploader:
                     timeout=aiohttp.ClientTimeout(total=self.upload_timeout),
                 ) as response:
                     text = await response.text()
-                    logger.info(f"Lulustream response: {text[:300]}")
+                    logger.info(f"Lulustream raw response: {text[:400]}")
 
                     if response.status != 200:
                         return {
@@ -100,30 +100,54 @@ class LulustreamUploader:
                     try:
                         data = await response.json()
                     except Exception:
-                        data = {"result": text}
+                        # Sometimes Lulu may return plain text
+                        return {"success": False, "error": text}
 
-                    if data.get("msg") == "OK" or data.get("status") == 200:
-                        file_code = data.get("filecode") or data.get("file_code")
-                        if file_code:
-                            return {
-                                "success": True,
-                                "file_code": file_code,
-                                "watch_url": f"https://lulustream.com/{file_code}",
-                                "embed_url": f"https://lulustream.com/e/{file_code}",
-                                "download_url": f"https://lulustream.com/d/{file_code}",
-                                "title": title,
-                                "tags": payload.get("tags", ""),
-                            }
+                    # Normal success structure:
+                    # { "msg": "OK", "status": 200, "result": { "filecode": "..." } }
+                    msg = str(data.get("msg", "")).upper()
+                    status_val = data.get("status")
+                    result_obj = data.get("result") or {}
 
-                    return {
-                        "success": False,
-                        "error": data.get("result", "Upload failed"),
-                    }
+                    file_code = (
+                        result_obj.get("filecode")
+                        or data.get("filecode")
+                        or data.get("file_code")
+                    )
+
+                    # Case 1: Proper OK + filecode
+                    if (msg == "OK" or status_val == 200) and file_code:
+                        return {
+                            "success": True,
+                            "file_code": file_code,
+                            "watch_url": f"https://lulustream.com/{file_code}",
+                            "embed_url": f"https://lulustream.com/e/{file_code}",
+                            "download_url": f"https://lulustream.com/d/{file_code}",
+                            "title": title,
+                            "tags": payload.get("tags", ""),
+                        }
+
+                    # Case 2: Some responses contain only filecode (seen in your screenshot)
+                    if file_code and not (msg == "OK" or status_val == 200):
+                        logger.warning(
+                            f"Lulustream returned filecode without OK/status: {data}"
+                        )
+                        return {
+                            "success": True,
+                            "file_code": file_code,
+                            "watch_url": f"https://lulustream.com/{file_code}",
+                            "embed_url": f"https://lulustream.com/e/{file_code}",
+                            "download_url": f"https://lulustream.com/d/{file_code}",
+                            "title": title,
+                            "tags": payload.get("tags", ""),
+                        }
+
+                    return {"success": False, "error": str(data)}
 
         except asyncio.TimeoutError:
             return {"success": False, "error": "Upload timeout"}
         except Exception as e:
-            logger.error(f"Lulustream upload exception: {e}")
+            logger.error(f"Lulustream upload exception: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
     async def get_video_info(self, file_code: str) -> Dict:
@@ -153,8 +177,8 @@ class LulustreamTelegramBot:
         self,
         video_url: str,
         title: str,
-        thumbnail: str = None,
-        caption: str = None,
+        thumbnail: Optional[str] = None,
+        caption: Optional[str] = None,
     ) -> Dict:
         """Auto-upload video via URL and post direct link to adult channel."""
         if not LulustreamConfig.AUTO_UPLOAD:
@@ -167,7 +191,7 @@ class LulustreamTelegramBot:
             video_url=video_url, title=title, is_adult=True
         )
 
-        if result["success"]:
+        if result.get("success"):
             await self.post_to_adult_channel(
                 result=result, thumbnail=thumbnail, caption=caption, download_url=video_url
             )
@@ -177,9 +201,9 @@ class LulustreamTelegramBot:
     async def post_to_adult_channel(
         self,
         result: Dict,
-        thumbnail: str = None,
-        caption: str = None,
-        download_url: str = None,
+        thumbnail: Optional[str] = None,
+        caption: Optional[str] = None,
+        download_url: Optional[str] = None,
     ):
         """Post DIRECT Lulu link to adult channel."""
         if not LulustreamConfig.ADULT_CHANNEL_ID:
@@ -226,7 +250,7 @@ class LulustreamTelegramBot:
 
 
 # Global instance
-_lulu_bot: LulustreamTelegramBot | None = None
+_lulu_bot: Optional[LulustreamTelegramBot] = None
 
 
 def init_lulustream_telegram(bot):
@@ -242,14 +266,14 @@ def init_lulustream_telegram(bot):
     return _lulu_bot
 
 
-def get_lulustream_uploader():
+def get_lulustream_uploader() -> Optional[LulustreamTelegramBot]:
     return _lulu_bot
 
 
 # ============= SOURCE CHANNEL MONITOR =============
 
 
-def _extract_url_from_caption(caption: str) -> str | None:
+def _extract_url_from_caption(caption: str) -> Optional[str]:
     """Find first reasonable URL in caption."""
     if not caption:
         return None
@@ -270,35 +294,46 @@ def _extract_url_from_caption(caption: str) -> str | None:
 async def monitor_source_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Triggered on channel_post from SOURCE_CHANNEL_ID."""
     try:
+        logger.info("➡️ monitor_source_channel called")
+
         msg = update.channel_post
         if not msg:
+            logger.info("❌ No channel_post in update")
             return
 
+        logger.info(f"📡 channel_post from chat_id={msg.chat.id}")
+
         if msg.chat.id != LulustreamConfig.SOURCE_CHANNEL_ID:
+            logger.info(
+                f"❌ Chat ID mismatch. Expected {LulustreamConfig.SOURCE_CHANNEL_ID}, got {msg.chat.id}"
+            )
             return
 
         if not LulustreamConfig.AUTO_UPLOAD:
+            logger.info("⏸️ AUTO_UPLOAD disabled, skipping")
             return
 
         video = msg.video or msg.document
         if not video:
+            logger.info("❌ No video/document in channel_post")
             return
 
         caption = msg.caption or "Untitled Video"
+        logger.info(f"📝 Caption: {caption}")
+
         title = caption.split("\n")[0] if caption else "Untitled Video"
         title = re.sub(r"[^\w\s\-()]", "", title)[:100]
 
         thumb_id = video.thumbnail.file_id if video.thumbnail else None
 
         direct_link = _extract_url_from_caption(caption)
+        logger.info(f"🔍 Extracted URL: {direct_link}")
 
         if not direct_link:
             logger.warning(
                 "No usable URL found in caption. Skipping Lulustream upload."
             )
             return
-
-        logger.info(f"Source post detected, URL: {direct_link[:80]}")
 
         lulu = get_lulustream_uploader()
         if not lulu:
@@ -325,7 +360,7 @@ async def monitor_source_channel(update: Update, context: ContextTypes.DEFAULT_T
             )
 
     except Exception as e:
-        logger.error(f"Error in monitor_source_channel: {e}")
+        logger.error(f"Error in monitor_source_channel: {e}", exc_info=True)
 
 
 def get_source_channel_handler():
@@ -387,7 +422,7 @@ async def handle_lulu_upload_command(
         )
     else:
         await status.edit_text(
-            f"❌ Failed: `{result.get('error')}`", parse_mode="Markdown"
+            f"❌ Failed:\n`{result.get('error')}`", parse_mode="Markdown"
         )
 
 
@@ -442,8 +477,8 @@ Adult channel: `{LulustreamConfig.ADULT_CHANNEL_ID}`
 
 Flow:
 1. You post adult video post in **source channel** with download link.  
-2. Bot uploads via Lulustream *remote URL API*.  
+2. Bot uploads via Lulustream remote URL API.  
 3. Direct Lulu link posts in **adult channel** with 18+ warning.
 """
     await update.message.reply_text(txt, parse_mode="Markdown")
-        
+                        
