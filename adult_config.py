@@ -18,6 +18,7 @@ LULUSTREAM_API_KEY = os.getenv("LULUSTREAM_API_KEY", "")
 # Telegram Configuration
 ADULT_CHANNEL_ID = int(os.getenv("ADULT_CHANNEL_ID", "0"))  # Your adult content channel
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "0").split(",")]  # Admin user IDs
+SOURCE_ADULT_CHANNEL_ID = int(os.getenv("SOURCE_ADULT_CHANNEL_ID", "0"))
 
 # Scraping Configuration
 MIN_VIEWS = int(os.getenv("MIN_VIEWS", "20000"))  # Minimum views for videos
