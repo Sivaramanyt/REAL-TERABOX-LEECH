@@ -1,19 +1,21 @@
 """
 Terabox Leech Bot with Universal Shortlink Verification & Auto-Forward & Random Videos
++ Lulustream Auto Upload Module
 """
+
 import logging
 import asyncio
 import sys
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-
 from config import *
 from handlers import (
     start, help_command, leech_attempt, verify_callback,
     stats, test_forward, test_shortlink, reset_verify,
-    reset_video_verify,  # NEW
-    dashboard_callback   # NEW
+    reset_video_verify, # NEW
+    dashboard_callback # NEW
 )
+
 from database import db
 from health_server import run_health_server
 
@@ -25,8 +27,10 @@ logging.basicConfig(
     level=logging.INFO,
     handlers=[logging.StreamHandler(sys.stdout)]
 )
+
 logger = logging.getLogger(__name__)
 
+# Random Videos Module
 try:
     from random_videos import send_random_video, handle_random_video_callback, auto_save_video
     RANDOM_VIDEOS_ENABLED = True
@@ -34,12 +38,31 @@ except ImportError:
     logger.warning("⚠️ random_videos.py not found - Random videos feature disabled")
     RANDOM_VIDEOS_ENABLED = False
 
+# Channel Monitor Module
 try:
     from channel_monitor import cleanup_invalid_videos
     CHANNEL_MONITOR_ENABLED = True
 except ImportError:
     logger.warning("⚠️ channel_monitor.py not found - Auto-cleanup disabled")
     CHANNEL_MONITOR_ENABLED = False
+
+# ============= LULUSTREAM MODULE =============
+try:
+    from lulustream_module import (
+        init_lulustream_telegram, 
+        handle_lulu_upload_command,
+        handle_lulu_info_command,
+        handle_lulu_toggle_command,
+        handle_lulu_help_command,
+        get_lulustream_uploader
+    )
+    LULUSTREAM_ENABLED = True
+    logger.info("✅ Lulustream module imported successfully")
+except ImportError:
+    logger.warning("⚠️ lulustream_module.py not found - Lulustream feature disabled")
+    LULUSTREAM_ENABLED = False
+# ============================================
+
 
 def display_startup_info():
     startup_info = f"""
@@ -71,10 +94,15 @@ def display_startup_info():
 📊 Dashboard Menu:
    ✅ Interactive dashboard enabled
 
+🎥 Lulustream Auto Upload:
+   {'✅ Enabled - Auto-upload to Lulustream' if LULUSTREAM_ENABLED else '❌ Disabled (module not found)'}
+   {'   🔑 API Key: Configured' if LULUSTREAM_ENABLED and hasattr(config, 'LULUSTREAM_API_KEY') else ''}
+
 ===== STARTUP COMPLETE =====
-"""
+    """
     print(startup_info)
     logger.info("Bot configuration loaded successfully")
+
 
 async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -85,22 +113,36 @@ async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"❌ Message router error: {e}")
         await update.message.reply_text("❌ An error occurred while processing your message. Please try again.")
 
+
 def main():
     try:
         display_startup_info()
+        
         logger.info("🏥 Starting health server...")
         run_health_server()
-
+        
         logger.info("🤖 Creating bot application...")
         application = Application.builder().token(BOT_TOKEN).build()
-
+        
+        # ============= INITIALIZE LULUSTREAM =============
+        if LULUSTREAM_ENABLED:
+            try:
+                init_lulustream_telegram(application.bot)
+                logger.info("✅ Lulustream module initialized successfully")
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize Lulustream: {e}")
+        # ================================================
+        
         logger.info("⚙️ Registering handlers...")
+        
+        # Basic Commands
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("leech", leech_attempt))
         application.add_handler(CommandHandler("stats", stats))
-        application.add_handler(CommandHandler("cancel", cancel_current_leech))  # NEW
-
+        application.add_handler(CommandHandler("cancel", cancel_current_leech))
+        
+        # Random Videos Module
         if RANDOM_VIDEOS_ENABLED:
             application.add_handler(CommandHandler("videos", send_random_video))
             application.add_handler(CallbackQueryHandler(handle_random_video_callback, pattern="^random_video$"))
@@ -108,26 +150,44 @@ def main():
                 filters.ChatType.CHANNEL & (filters.VIDEO | filters.Document.ALL),
                 auto_save_video
             ))
-
+        
+        # Channel Monitor Module
         if CHANNEL_MONITOR_ENABLED:
             application.add_handler(CommandHandler("cleanup_videos", cleanup_invalid_videos))
-
+        
+        # ============= LULUSTREAM COMMANDS =============
+        if LULUSTREAM_ENABLED:
+            application.add_handler(CommandHandler("uploadlulu", handle_lulu_upload_command))
+            application.add_handler(CommandHandler("luluinfo", handle_lulu_info_command))
+            application.add_handler(CommandHandler("togglelulu", handle_lulu_toggle_command))
+            application.add_handler(CommandHandler("luluhelp", handle_lulu_help_command))
+            logger.info("✅ Lulustream commands registered")
+        # ==============================================
+        
+        # Test & Admin Commands
         application.add_handler(CommandHandler("testforward", test_forward))
         application.add_handler(CommandHandler("testapi", test_shortlink))
         application.add_handler(CommandHandler("resetverify", reset_verify))
         application.add_handler(CommandHandler("resetvideos", reset_video_verify))
-
-        application.add_handler(CallbackQueryHandler(dashboard_callback))  # dashboard
-        application.add_handler(CallbackQueryHandler(cancel_leech_callback, pattern=r"^cancel_leech:\d+$"))  # NEW
-
+        
+        # Callback Handlers
+        application.add_handler(CallbackQueryHandler(dashboard_callback))
+        application.add_handler(CallbackQueryHandler(cancel_leech_callback, pattern=r"^cancel_leech:\d+$"))
+        
+        # Message Handlers (keep at end)
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
-        application.add_handler(CallbackQueryHandler(verify_callback))  # keep last
-
+        application.add_handler(CallbackQueryHandler(verify_callback))
+        
+        logger.info("✅ All handlers registered successfully")
+        logger.info("🚀 Starting bot polling...")
+        
         application.run_polling(allowed_updates=["message", "callback_query", "channel_post"])
-
+        
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
         sys.exit(1)
 
+
 if __name__ == '__main__':
     main()
+              
