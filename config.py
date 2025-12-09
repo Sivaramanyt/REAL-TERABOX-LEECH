@@ -45,6 +45,15 @@ DEEP_LINK_VERIFY_TOKEN_TIMEOUT = int(os.getenv("DEEP_LINK_VERIFY_TOKEN_TIMEOUT",
 # Auto-post previews to main channel
 AUTO_POST_ENABLED = os.getenv("AUTO_POST_ENABLED", "true").lower() == "true"
 POST_CHANNEL_ID = int(os.getenv("POST_CHANNEL_ID", "0"))
+# Add to your config.py
+
+# ============= LULUSTREAM CONFIGURATION =============
+LULUSTREAM_API_KEY = os.environ.get("LULUSTREAM_API_KEY", "")
+ADULT_CHANNEL_ID = int(os.environ.get("ADULT_CHANNEL_ID", "0"))
+AUTO_LULUSTREAM = os.environ.get("AUTO_LULUSTREAM", "True")
+LULU_TAGS = os.environ.get("LULU_TAGS", "tamil,adult,movies,hd")
+LULU_FOLDER_ID = os.environ.get("LULU_FOLDER_ID", "")
+# ===================================================
 
 # Messages
 START_MESSAGE = """
