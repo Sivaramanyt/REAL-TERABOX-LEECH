@@ -5,33 +5,56 @@ Terabox Leech Bot with Universal Shortlink Verification & Auto-Forward & Random 
 import logging
 import asyncio
 import sys
+
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes,
+)
 
 from config import *
 from handlers import (
-    start, help_command, leech_attempt, verify_callback,
-    stats, test_forward, test_shortlink, reset_verify,
+    start,
+    help_command,
+    leech_attempt,
+    verify_callback,
+    stats,
+    test_forward,
+    test_shortlink,
+    reset_verify,
     reset_video_verify,  # NEW
-    dashboard_callback  # NEW
+    dashboard_callback,  # NEW
 )
 
 from database import db
 from health_server import run_health_server
 
 # Import Terabox handlers (+ cancel)
-from terabox_handlers import handle_terabox_link, cancel_leech_callback, cancel_current_leech
+from terabox_handlers import (
+    handle_terabox_link,
+    cancel_leech_callback,
+    cancel_current_leech,
+)
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
 logger = logging.getLogger(__name__)
 
 try:
-    from random_videos import send_random_video, handle_random_video_callback, auto_save_video
+    from random_videos import (
+        send_random_video,
+        handle_random_video_callback,
+        auto_save_video,
+    )
+
     RANDOM_VIDEOS_ENABLED = True
 except ImportError:
     logger.warning("⚠️ random_videos.py not found - Random videos feature disabled")
@@ -39,45 +62,48 @@ except ImportError:
 
 try:
     from channel_monitor import cleanup_invalid_videos
+
     CHANNEL_MONITOR_ENABLED = True
 except ImportError:
     logger.warning("⚠️ channel_monitor.py not found - Auto-cleanup disabled")
     CHANNEL_MONITOR_ENABLED = False
+
 
 def display_startup_info():
     startup_info = f"""
 🚀 ===== TERABOX LEECH BOT STARTUP ===== 🚀
 
 📋 Bot Configuration:
-  🤖 Bot Username: @{BOT_USERNAME}
-  👤 Owner ID: {OWNER_ID}
-  💾 Database: {'✅ Connected' if MONGODB_URL else '❌ Not configured'}
+🤖 Bot Username: @{BOT_USERNAME}
+👤 Owner ID: {OWNER_ID}
+💾 Database: {'✅ Connected' if MONGODB_URL else '❌ Not configured'}
 
 💰 Monetization Setup:
-  🌐 Universal Shortlinks: {'✅ Enabled' if SHORTLINK_API else '❌ Disabled'}
-  🔗 Service URL: {SHORTLINK_URL if SHORTLINK_URL else 'Not configured'}
-  💵 Revenue System: {'✅ Active' if SHORTLINK_API and SHORTLINK_URL else '❌ Inactive'}
+🌐 Universal Shortlinks: {'✅ Enabled' if SHORTLINK_API else '❌ Disabled'}
+🔗 Service URL: {SHORTLINK_URL if SHORTLINK_URL else 'Not configured'}
+💵 Revenue System: {'✅ Active' if SHORTLINK_API and SHORTLINK_URL else '❌ Inactive'}
 
 📢 Auto-Forward System:
-  📡 Status: {'✅ Enabled' if AUTO_FORWARD_ENABLED else '❌ Disabled'}
-  📝 Channel ID: {BACKUP_CHANNEL_ID if BACKUP_CHANNEL_ID else 'Not configured'}
+📡 Status: {'✅ Enabled' if AUTO_FORWARD_ENABLED else '❌ Disabled'}
+📝 Channel ID: {BACKUP_CHANNEL_ID if BACKUP_CHANNEL_ID else 'Not configured'}
 
 📦 Terabox Leech:
-  ✅ Enabled with split>300MB, cancel, and concurrency caps
+✅ Enabled with split>300MB, cancel, and concurrency caps
 
 🎬 Random Videos:
-  {'✅ Enabled with SEPARATE video verification' if RANDOM_VIDEOS_ENABLED else '❌ Disabled (file not found)'}
+{'✅ Enabled with SEPARATE video verification' if RANDOM_VIDEOS_ENABLED else '❌ Disabled (file not found)'}
 
 🗑️ Channel Monitor:
-  {'✅ Auto-cleanup enabled' if CHANNEL_MONITOR_ENABLED else '❌ Manual cleanup only'}
+{'✅ Auto-cleanup enabled' if CHANNEL_MONITOR_ENABLED else '❌ Manual cleanup only'}
 
 📊 Dashboard Menu:
-  ✅ Interactive dashboard enabled
+✅ Interactive dashboard enabled
 
 ===== STARTUP COMPLETE =====
 """
     print(startup_info)
     logger.info("Bot configuration loaded successfully")
+
 
 async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -86,101 +112,167 @@ async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await leech_attempt(update, context)
     except Exception as e:
         logger.error(f"❌ Message router error: {e}")
-        await update.message.reply_text("❌ An error occurred while processing your message. Please try again.")
+        await update.message.reply_text(
+            "❌ An error occurred while processing your message. Please try again."
+        )
+
 
 def main():
     try:
         display_startup_info()
-        
+
         logger.info("🏥 Starting health server...")
         run_health_server()
-        
+
         logger.info("🤖 Creating bot application...")
         application = Application.builder().token(BOT_TOKEN).build()
-        
+
         logger.info("⚙️ Registering handlers...")
-        
+
         # Basic commands
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("leech", leech_attempt))
         application.add_handler(CommandHandler("stats", stats))
         application.add_handler(CommandHandler("cancel", cancel_current_leech))
-        
+
         # Random videos feature
         if RANDOM_VIDEOS_ENABLED:
             application.add_handler(CommandHandler("videos", send_random_video))
-            application.add_handler(CallbackQueryHandler(handle_random_video_callback, pattern="^random_video$"))
-            application.add_handler(MessageHandler(
-                filters.ChatType.CHANNEL & (filters.VIDEO | filters.Document.ALL),
-                auto_save_video
-            ))
-        
+            application.add_handler(
+                CallbackQueryHandler(
+                    handle_random_video_callback, pattern="^random_video$"
+                )
+            )
+            application.add_handler(
+                MessageHandler(
+                    filters.ChatType.CHANNEL & (filters.VIDEO | filters.Document.ALL),
+                    auto_save_video,
+                )
+            )
+
         # Channel monitor
         if CHANNEL_MONITOR_ENABLED:
-            application.add_handler(CommandHandler("cleanup_videos", cleanup_invalid_videos))
-        
+            application.add_handler(
+                CommandHandler("cleanup_videos", cleanup_invalid_videos)
+            )
+
         # Testing and admin commands
         application.add_handler(CommandHandler("testforward", test_forward))
         application.add_handler(CommandHandler("testapi", test_shortlink))
         application.add_handler(CommandHandler("resetverify", reset_verify))
         application.add_handler(CommandHandler("resetvideos", reset_video_verify))
-        
+
         # Callback handlers
         application.add_handler(CallbackQueryHandler(dashboard_callback))
-        application.add_handler(CallbackQueryHandler(cancel_leech_callback, pattern=r"^cancel_leech:\d+$"))
-        
+        application.add_handler(
+            CallbackQueryHandler(
+                cancel_leech_callback, pattern=r"^cancel_leech:\d+$"
+            )
+        )
+
         # Message handlers (keep near end)
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
+        application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, message_router)
+        )
         application.add_handler(CallbackQueryHandler(verify_callback))  # keep last
-        
-        # ========== ADULT CONTENT AUTOMATION (NEW) ==========
+
+        # ========== ADULT CONTENT AUTOMATION (OLD SCRAPER) ==========
         try:
             from adult_handlers import adult_status, adult_manual_scrape, adult_search
             from adult_automation import auto_scrape_and_post
-            from adult_config import LULUSTREAM_API_KEY, ADULT_CHANNEL_ID, SCRAPE_HOURS
+            from adult_config import (
+                LULUSTREAM_API_KEY,
+                ADULT_CHANNEL_ID,
+                SCRAPE_HOURS,
+            )
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
-            
+
             if LULUSTREAM_API_KEY and ADULT_CHANNEL_ID:
-                logger.info("🔧 Setting up adult content automation...")
-                
-                # Add admin commands
+                logger.info("🔧 Setting up adult content automation (scraper)...")
+
+                # Admin commands
                 application.add_handler(CommandHandler("adultstatus", adult_status))
                 application.add_handler(CommandHandler("adultscrape", adult_manual_scrape))
                 application.add_handler(CommandHandler("adultsearch", adult_search))
-                
-                # Setup scheduler for automatic scraping
+
+                # Scheduler (you can disable later if only source-channel flow is used)
                 scheduler = AsyncIOScheduler()
-                
-                # Schedule scraping at specified hours
                 for hour in SCRAPE_HOURS:
                     scheduler.add_job(
-                        lambda: asyncio.create_task(auto_scrape_and_post(application.bot)),
-                        'cron',
+                        lambda: asyncio.create_task(
+                            auto_scrape_and_post(application.bot)
+                        ),
+                        "cron",
                         hour=int(hour),
-                        minute=0
+                        minute=0,
                     )
-                
+
                 scheduler.start()
-                logger.info("✅ Adult content automation enabled")
-                logger.info(f"📅 Scheduled for hours: {', '.join(SCRAPE_HOURS)}")
+                logger.info("✅ Adult content automation (scraper) enabled")
+                logger.info(
+                    f"📅 Scheduled for hours: {', '.join(SCRAPE_HOURS)}"
+                )
             else:
-                logger.info("⚠️ Adult automation disabled (LULUSTREAM_API_KEY or ADULT_CHANNEL_ID not set)")
-                
+                logger.info(
+                    "⚠️ Adult automation disabled (LULUSTREAM_API_KEY or ADULT_CHANNEL_ID not set)"
+                )
         except ImportError as e:
             logger.warning(f"⚠️ Adult automation not available: {e}")
         except Exception as e:
             logger.error(f"❌ Adult automation setup error: {e}")
-        # ========== END ADULT AUTOMATION ==========
-        
+
+        # ========== ADULT SOURCE CHANNEL AUTOMATION (NEW) ==========
+        try:
+            # Handlers you will create in adult_source_handlers.py
+            from adult_source_handlers import (
+                handle_source_video,
+                handle_source_link,
+            )
+            from adult_config import SOURCE_ADULT_CHANNEL_ID
+
+            if SOURCE_ADULT_CHANNEL_ID:
+                application.add_handler(
+                    MessageHandler(
+                        filters.ChatType.CHANNEL & filters.Video.ALL,
+                        handle_source_video,
+                    )
+                )
+                application.add_handler(
+                    MessageHandler(
+                        filters.ChatType.CHANNEL
+                        & filters.TEXT
+                        & ~filters.COMMAND,
+                        handle_source_link,
+                    )
+                )
+                logger.info(
+                    f"✅ Adult source channel automation enabled for chat ID {SOURCE_ADULT_CHANNEL_ID}"
+                )
+            else:
+                logger.info(
+                    "⚠️ SOURCE_ADULT_CHANNEL_ID not set; adult source handlers disabled"
+                )
+        except ImportError:
+            logger.info(
+                "⚠️ adult_source_handlers.py not found; skipping adult source automation"
+            )
+        except Exception as e:
+            logger.error(f"❌ Adult source automation setup error: {e}")
+
+        # ========== END ADULT AUTOMATION SECTIONS ==========
+
         # Start the bot
         logger.info("🚀 Starting bot polling...")
-        application.run_polling(allowed_updates=["message", "callback_query", "channel_post"])
-        
+        application.run_polling(
+            allowed_updates=["message", "callback_query", "channel_post"]
+        )
+
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
         sys.exit(1)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
     
