@@ -12,8 +12,8 @@ from config import *
 from handlers import (
     start, help_command, leech_attempt, verify_callback,
     stats, test_forward, test_shortlink, reset_verify,
-    reset_video_verify, # NEW
-    dashboard_callback # NEW
+    reset_video_verify,
+    dashboard_callback
 )
 
 from database import db
@@ -54,12 +54,13 @@ try:
         handle_lulu_info_command,
         handle_lulu_toggle_command,
         handle_lulu_help_command,
+        get_source_channel_handler,
         get_lulustream_uploader
     )
     LULUSTREAM_ENABLED = True
     logger.info("✅ Lulustream module imported successfully")
-except ImportError:
-    logger.warning("⚠️ lulustream_module.py not found - Lulustream feature disabled")
+except ImportError as e:
+    logger.warning(f"⚠️ lulustream_module.py not found - Lulustream feature disabled: {e}")
     LULUSTREAM_ENABLED = False
 # ============================================
 
@@ -97,6 +98,7 @@ def display_startup_info():
 🎥 Lulustream Auto Upload:
    {'✅ Enabled - Auto-upload to Lulustream' if LULUSTREAM_ENABLED else '❌ Disabled (module not found)'}
    {'   🔑 API Key: Configured' if LULUSTREAM_ENABLED and hasattr(config, 'LULUSTREAM_API_KEY') else ''}
+   {'   📺 Direct Link Only (No Embed)' if LULUSTREAM_ENABLED else ''}
 
 ===== STARTUP COMPLETE =====
     """
@@ -131,6 +133,8 @@ def main():
                 logger.info("✅ Lulustream module initialized successfully")
             except Exception as e:
                 logger.error(f"❌ Failed to initialize Lulustream: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
         # ================================================
         
         logger.info("⚙️ Registering handlers...")
@@ -150,19 +154,29 @@ def main():
                 filters.ChatType.CHANNEL & (filters.VIDEO | filters.Document.ALL),
                 auto_save_video
             ))
+            logger.info("✅ Random videos module handlers registered")
         
         # Channel Monitor Module
         if CHANNEL_MONITOR_ENABLED:
             application.add_handler(CommandHandler("cleanup_videos", cleanup_invalid_videos))
+            logger.info("✅ Channel monitor handlers registered")
         
-        # ============= LULUSTREAM COMMANDS =============
+        # ============= LULUSTREAM COMMANDS & MONITOR =============
         if LULUSTREAM_ENABLED:
+            # Command handlers
             application.add_handler(CommandHandler("uploadlulu", handle_lulu_upload_command))
             application.add_handler(CommandHandler("luluinfo", handle_lulu_info_command))
             application.add_handler(CommandHandler("togglelulu", handle_lulu_toggle_command))
             application.add_handler(CommandHandler("luluhelp", handle_lulu_help_command))
+            
+            # Source channel monitor
+            source_handler = get_source_channel_handler()
+            if source_handler:
+                application.add_handler(source_handler)
+                logger.info("✅ Lulustream source channel monitor registered")
+            
             logger.info("✅ Lulustream commands registered")
-        # ==============================================
+        # ========================================================
         
         # Test & Admin Commands
         application.add_handler(CommandHandler("testforward", test_forward))
@@ -185,9 +199,11 @@ def main():
         
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         sys.exit(1)
 
 
 if __name__ == '__main__':
     main()
-              
+    
