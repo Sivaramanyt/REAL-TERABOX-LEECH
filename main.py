@@ -198,7 +198,6 @@ def main():
                 )
                 application.add_handler(CommandHandler("adultsearch", adult_search))
 
-                # Scheduler (can be disabled later if only source-channel flow is used)
                 scheduler = AsyncIOScheduler()
                 for hour in SCRAPE_HOURS:
                     scheduler.add_job(
@@ -226,7 +225,7 @@ def main():
 
         # ========== ADULT SOURCE CHANNEL AUTOMATION (NEW) ==========
         try:
-            # Handlers you implement in adult_source_handlers.py
+            # Handlers implemented in adult_source_handlers.py
             from adult_source_handlers import (
                 handle_source_video,
                 handle_source_link,
@@ -234,7 +233,6 @@ def main():
             from adult_config import SOURCE_ADULT_CHANNEL_ID
 
             if SOURCE_ADULT_CHANNEL_ID:
-                # FIX: use filters.VIDEO, not filters.Video
                 application.add_handler(
                     MessageHandler(
                         filters.ChatType.CHANNEL & filters.VIDEO,
@@ -278,4 +276,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                                            
+    
