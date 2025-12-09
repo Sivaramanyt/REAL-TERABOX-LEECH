@@ -47,13 +47,22 @@ AUTO_POST_ENABLED = os.getenv("AUTO_POST_ENABLED", "true").lower() == "true"
 POST_CHANNEL_ID = int(os.getenv("POST_CHANNEL_ID", "0"))
 # Add to your config.py
 
+# Add these lines to your existing config.py
+
 # ============= LULUSTREAM CONFIGURATION =============
 LULUSTREAM_API_KEY = os.environ.get("LULUSTREAM_API_KEY", "")
+
+# Source channel - Where you upload videos
+SOURCE_CHANNEL_ID = int(os.environ.get("SOURCE_CHANNEL_ID", "0"))
+
+# Adult channel - Where Lulustream links will be posted
 ADULT_CHANNEL_ID = int(os.environ.get("ADULT_CHANNEL_ID", "0"))
+
 AUTO_LULUSTREAM = os.environ.get("AUTO_LULUSTREAM", "True")
 LULU_TAGS = os.environ.get("LULU_TAGS", "tamil,adult,movies,hd")
 LULU_FOLDER_ID = os.environ.get("LULU_FOLDER_ID", "")
 # ===================================================
+
 
 # Messages
 START_MESSAGE = """
