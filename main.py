@@ -96,9 +96,7 @@ def display_startup_info():
    ✅ Interactive dashboard enabled
 
 🎥 Lulustream Auto Upload:
-   {'✅ Enabled - Auto-upload to Lulustream' if LULUSTREAM_ENABLED else '❌ Disabled (module not found)'}
-   {'   🔑 API Key: Configured' if LULUSTREAM_ENABLED and hasattr(config, 'LULUSTREAM_API_KEY') else ''}
-   {'   📺 Direct Link Only (No Embed)' if LULUSTREAM_ENABLED else ''}
+   {'✅ Enabled - Direct Link Only (No Embed)' if LULUSTREAM_ENABLED else '❌ Disabled (module not found)'}
 
 ===== STARTUP COMPLETE =====
     """
@@ -206,4 +204,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
+                   
